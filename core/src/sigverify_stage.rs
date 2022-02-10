@@ -249,6 +249,8 @@ impl SigVerifyStage {
 
         let mut verify_batch_time = Measure::start("sigverify_batch_time");
         let batches = verifier.verify_batches(batches, num_valid_packets);
+
+        debug!("discarded packages: {}, dedup failed packages: {}", Self::count_discarded_packages(&batches), dedup_fail);
         sendr.send(batches)?;
         verify_batch_time.stop();
 
@@ -343,6 +345,13 @@ impl SigVerifyStage {
 
     pub fn join(self) -> thread::Result<()> {
         self.thread_hdl.join()
+    }
+
+    fn count_discarded_packages(batches: &[PacketBatch]) -> usize {
+        batches
+            .iter()
+            .flat_map(|batch| batch.packets.iter().map(|p| p.meta.discard() as usize))
+            .sum()
     }
 }
 
