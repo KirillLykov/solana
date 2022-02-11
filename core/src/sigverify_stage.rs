@@ -58,6 +58,7 @@ struct SigVerifierStats {
     total_packets: usize,
     total_dedup: usize,
     total_excess_fail: usize,
+    total_discarded: usize,
 }
 
 impl SigVerifierStats {
@@ -166,6 +167,7 @@ impl SigVerifierStats {
             ("total_packets", self.total_packets, i64),
             ("total_dedup", self.total_dedup, i64),
             ("total_excess_fail", self.total_excess_fail, i64),
+            ("total_discarded", self.total_discarded, i64),
         );
     }
 }
@@ -249,10 +251,12 @@ impl SigVerifyStage {
 
         let mut verify_batch_time = Measure::start("sigverify_batch_time");
         let batches = verifier.verify_batches(batches, num_valid_packets);
+        let count_discarded = Self::count_discarded_packages(&batches);
 
-        debug!("discarded packages: {}, dedup failed packages: {}", Self::count_discarded_packages(&batches), dedup_fail);
         sendr.send(batches)?;
         verify_batch_time.stop();
+
+        debug!("discarded packages: {}, dedup failed packages: {}", count_discarded, dedup_fail);
 
         debug!(
             "@{:?} verifier: done. batches: {} total verify time: {:?} verified: {} v/s {}",
@@ -285,6 +289,7 @@ impl SigVerifyStage {
         stats.total_packets += num_packets;
         stats.total_dedup += dedup_fail;
         stats.total_excess_fail += excess_fail;
+        stats.total_discarded += count_discarded;
 
         Ok(())
     }
