@@ -40,7 +40,9 @@ pub struct SigVerifyStage {
 }
 
 pub trait SigVerifier {
-    fn verify_batches(&self, batches: Vec<PacketBatch>, valid_packets: usize) -> Vec<PacketBatch>;
+    /// Returns marked packets together with number of discurded packets
+    /// a returned packet is marked as discurded if it fails verification
+    fn verify_batches(&self, batches: Vec<PacketBatch>, valid_packets: usize) -> (Vec<PacketBatch>, usize);
 }
 
 #[derive(Default, Clone)]
@@ -177,9 +179,9 @@ impl SigVerifier for DisabledSigVerifier {
         &self,
         mut batches: Vec<PacketBatch>,
         _valid_packets: usize,
-    ) -> Vec<PacketBatch> {
+    ) -> (Vec<PacketBatch>, usize) {
         sigverify::ed25519_verify_disabled(&mut batches);
-        batches
+        (batches, 0)
     }
 }
 
@@ -250,8 +252,7 @@ impl SigVerifyStage {
         discard_time.stop();
 
         let mut verify_batch_time = Measure::start("sigverify_batch_time");
-        let batches = verifier.verify_batches(batches, num_valid_packets);
-        let count_discarded = Self::count_discarded_packages(&batches);
+        let (batches, count_discarded) = verifier.verify_batches(batches, num_valid_packets);
 
         sendr.send(batches)?;
         verify_batch_time.stop();
@@ -350,13 +351,6 @@ impl SigVerifyStage {
 
     pub fn join(self) -> thread::Result<()> {
         self.thread_hdl.join()
-    }
-
-    fn count_discarded_packages(batches: &[PacketBatch]) -> usize {
-        batches
-            .iter()
-            .flat_map(|batch| batch.packets.iter().map(|p| p.meta.discard() as usize))
-            .sum()
     }
 }
 
