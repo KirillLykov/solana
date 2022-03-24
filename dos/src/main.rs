@@ -163,7 +163,6 @@ impl TransactionGenerator {
         if !self.transaction_params.unique_transactions {
             self.cached_transaction = Some(transaction.clone());
         }
-
         transaction
     }
 }
@@ -258,6 +257,7 @@ fn run_dos(
     let mut last_log = Instant::now();
     let mut count = 0;
     let mut error_count = 0;
+    let mut gen_time_total: u128 = 0;
     loop {
         if params.mode == Mode::Rpc {
             match params.data_type {
@@ -282,22 +282,32 @@ fn run_dos(
                 }
             }
         } else {
+            let t_start = Instant::now();
+
             if params.data_type == DataType::Random {
                 thread_rng().fill(&mut data[..]);
             }
             if let Some(tg) = transaction_generator.as_mut() {
                 let tx = tg.generate(payer, &rpc_client);
-                info!("{:?}", tx);
+                //info!("{:?}", tx);
                 data = bincode::serialize(&tx).unwrap();
             }
+
             let res = socket.send_to(&data, target);
             if res.is_err() {
                 error_count += 1;
             }
+            gen_time_total += t_start.elapsed().as_micros();
         }
         count += 1;
-        if last_log.elapsed().as_millis() > 10_000 {
+        if last_log.elapsed().as_millis() > 5_000 {
             info!("count: {} errors: {}", count, error_count);
+            info!(
+                "tps: {}, total: {}",
+                count as f32 / 1.0,
+                (gen_time_total as f64) / (count as f64),
+            );
+            gen_time_total = 0;
             last_log = Instant::now();
             count = 0;
         }
@@ -537,6 +547,73 @@ pub mod test {
                 skip_gossip: false,
                 allow_private_addr: false,
                 transaction_params: TransactionParams::default(),
+            },
+        );
+    }
+
+    #[test]
+    fn test_dos_random() {
+        solana_logger::setup();
+        let num_nodes = 1;
+        let cluster =
+            LocalCluster::new_with_equal_stakes(num_nodes, 100, 3, SocketAddrSpace::Unspecified);
+        assert_eq!(cluster.validators.len(), num_nodes);
+
+        let nodes = cluster.get_node_pubkeys();
+        let node = cluster.get_contact_info(&nodes[0]).unwrap().clone();
+        let nodes_slice = [node];
+
+        // send random transactions to TPU
+        // will be discarded on sigverify stage
+        run_dos(
+            &nodes_slice,
+            100000,
+            None,
+            DosClientParameters {
+                entrypoint_addr: cluster.entry_point_info.gossip,
+                mode: Mode::Tpu,
+                data_size: 1024,
+                data_type: DataType::Random,
+                data_input: None,
+                skip_gossip: false,
+                allow_private_addr: false,
+                transaction_params: TransactionParams::default(),
+            },
+        );
+    }
+    #[test]
+    fn test_dos_unique() {
+        solana_logger::setup();
+        let num_nodes = 1;
+        let cluster =
+            LocalCluster::new_with_equal_stakes(num_nodes, 100, 3, SocketAddrSpace::Unspecified);
+        assert_eq!(cluster.validators.len(), num_nodes);
+
+        let nodes = cluster.get_node_pubkeys();
+        let node = cluster.get_contact_info(&nodes[0]).unwrap().clone();
+        let nodes_slice = [node];
+
+        // send unique transaction to TPU with valid blockhash
+        // will fail with error processing Instruction 0: missing required signature for instruction
+        run_dos(
+            &nodes_slice,
+            50000,
+            Some(&cluster.funding_keypair),
+            DosClientParameters {
+                entrypoint_addr: cluster.entry_point_info.gossip,
+                mode: Mode::Tpu,
+                data_size: 0, // irrelevant if not random
+                data_type: DataType::Transaction,
+                data_input: None,
+                skip_gossip: false,
+                allow_private_addr: false,
+                transaction_params: TransactionParams {
+                    num_signatures: 2,
+                    valid_blockhash: true,
+                    valid_signatures: true,
+                    unique_transactions: true,
+                    payer_filename: None,
+                },
             },
         );
     }
