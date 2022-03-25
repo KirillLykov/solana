@@ -29,6 +29,7 @@
 #![allow(clippy::integer_arithmetic)]
 use {
     clap::{crate_description, crate_name, crate_version, ArgEnum, Args, Parser},
+    crossbeam_channel::{unbounded, Receiver, Sender},
     log::*,
     rand::{thread_rng, Rng},
     serde::{Deserialize, Serialize},
@@ -50,6 +51,8 @@ use {
         net::{SocketAddr, UdpSocket},
         process::exit,
         str::FromStr,
+        sync::Arc,
+        thread,
         time::{Duration, Instant},
     },
 };
@@ -61,6 +64,113 @@ fn get_repair_contact(nodes: &[ContactInfo]) -> ContactInfo {
     contact
 }
 
+enum TxMsg {
+    Tx(Transaction),
+    Exit,
+}
+
+enum StatsMsg {
+    Count(u32),
+    Exit,
+}
+
+fn sender(
+    tx_receiver: Receiver<TxMsg>,
+    stats_sender: &Sender<StatsMsg>,
+    mut n_alive_threads: usize,
+    target: &SocketAddr,
+) -> thread::JoinHandle<()> {
+    let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+    let target = target.clone();
+    let stats_sender = stats_sender.clone();
+    thread::spawn(move || {
+        let mut t_stats = Instant::now();
+        let mut count = 0;
+        let mut error_count = 0;
+        loop {
+            match tx_receiver.recv() {
+                Ok(TxMsg::Tx(tx)) => {
+                    // serialize and send
+                    let data = bincode::serialize(&tx).unwrap();
+                    let res = socket.send_to(&data, target);
+                    if res.is_err() {
+                        error_count += 1;
+                    }
+
+                    count += 1;
+                    if t_stats.elapsed().as_millis() > 5_000 {
+                        let _ = stats_sender.send(StatsMsg::Count(count));
+                        t_stats = Instant::now();
+                        count = 0;
+                    }
+                }
+                Ok(TxMsg::Exit) => {
+                    info!("Worker is done");
+                    n_alive_threads -= 1;
+                    if n_alive_threads == 0 {
+                        info!("Exit sender");
+                        let _ = stats_sender.send(StatsMsg::Exit);
+                        break;
+                    }
+                }
+                _ => panic!("Sender panics"),
+            }
+        }
+    })
+}
+
+fn statistics_sampler(stats_receiver: Receiver<StatsMsg>) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut t_report = Instant::now();
+        let mut total = 0;
+        loop {
+            match stats_receiver.recv() {
+                Ok(StatsMsg::Count(num)) => {
+                    total += num;
+                    if t_report.elapsed().as_millis() > 10_000 {
+                        info!("stats {} tps", total / 10);
+                        total = 0;
+                        t_report = Instant::now();
+                    }
+                }
+                Ok(StatsMsg::Exit) => {
+                    info!("Stats worker is done with stats: {}", total);
+                    break;
+                }
+                _ => panic!("AAA"),
+            }
+        }
+    })
+}
+
+fn tx_generator(
+    tx_sender: &Sender<TxMsg>,
+    max_iter_per_thread: usize,
+    gen: &mut TransactionGenerator,
+    //payer: &Option<&Keypair>,
+    rpc_client: &Arc<RpcClient>,
+) -> thread::JoinHandle<()> {
+    let tx_sender = tx_sender.clone();
+    let mut gen = gen.clone();
+    let rpc_client = rpc_client.clone(); // TODO remove later, use thread for blockhashes
+    thread::spawn(move || {
+        let mut cnt = 0;
+        loop {
+            let tx = gen.generate(
+                //*payer,
+                &rpc_client,
+            );
+            let _ = tx_sender.send(TxMsg::Tx(tx));
+            if cnt >= max_iter_per_thread {
+                let _ = tx_sender.send(TxMsg::Exit);
+                break;
+            }
+            cnt += 1;
+        }
+    })
+}
+
+#[derive(Clone)]
 struct TransactionGenerator {
     blockhash: Hash,
     last_generated: Instant,
@@ -78,7 +188,11 @@ impl TransactionGenerator {
         }
     }
 
-    fn generate(&mut self, payer: Option<&Keypair>, rpc_client: &Option<RpcClient>) -> Transaction {
+    fn generate(
+        &mut self,
+        //payer: Option<&Keypair>,
+        rpc_client: &Arc<RpcClient>,
+    ) -> Transaction {
         if !self.transaction_params.unique_transactions && self.cached_transaction.is_some() {
             return self.cached_transaction.as_ref().unwrap().clone();
         }
@@ -87,7 +201,7 @@ impl TransactionGenerator {
         if self.transaction_params.valid_blockhash
             && self.last_generated.elapsed().as_millis() > 1000
         {
-            self.blockhash = rpc_client.as_ref().unwrap().get_latest_blockhash().unwrap();
+            self.blockhash = rpc_client.as_ref().get_latest_blockhash().unwrap();
             self.last_generated = Instant::now();
         }
 
@@ -102,7 +216,7 @@ impl TransactionGenerator {
         // transaction with payer, in this case signatures are valid and num_signatures is irrelevant
         // random payer will cause error "attempt to debit an account but found no record of a prior credit"
         // if payer is correct, it will trigger error with not enough signatures
-        let transaction = if let Some(payer) = payer {
+        let transaction = /*if let Some(payer) = payer {
             let instruction = Instruction::new_with_bincode(
                 program_ids[0],
                 &transfer_instruction,
@@ -117,7 +231,7 @@ impl TransactionGenerator {
                 &[payer],
                 self.blockhash,
             )
-        } else if self.transaction_params.valid_signatures {
+        } else*/ if self.transaction_params.valid_signatures {
             // Since we don't provide a payer, this transaction will end up
             // filtered at legacy.rs sanitize method (banking_stage) with error "a program cannot be payer"
             let kpvals: Vec<Keypair> = (0..self.transaction_params.num_signatures)
@@ -243,23 +357,25 @@ fn run_dos(
             info!("{:?}", tp);
 
             transaction_generator = Some(TransactionGenerator::new(tp));
+            /* TMP COMMENT
             let tx = transaction_generator
                 .as_mut()
                 .unwrap()
                 .generate(payer, &rpc_client);
             info!("{:?}", tx);
             data = bincode::serialize(&tx).unwrap();
+            */
         }
         DataType::GetAccountInfo => {}
         DataType::GetProgramAccounts => {}
     }
 
-    let mut last_log = Instant::now();
-    let mut count = 0;
-    let mut error_count = 0;
-    let mut gen_time_total: u128 = 0;
-    loop {
-        if params.mode == Mode::Rpc {
+    if params.mode == Mode::Rpc {
+        let mut last_log = Instant::now();
+        let mut count = 0;
+        let mut error_count = 0;
+        let mut gen_time_total: u128 = 0;
+        loop {
             match params.data_type {
                 DataType::GetAccountInfo => {
                     let res = rpc_client.as_ref().unwrap().get_account(
@@ -281,7 +397,29 @@ fn run_dos(
                     panic!("unsupported data type");
                 }
             }
-        } else {
+            count += 1;
+            if last_log.elapsed().as_millis() > 5_000 {
+                info!("count: {} errors: {}", count, error_count);
+                info!(
+                    "tps: {}, total: {}",
+                    count as f32 / 1.0,
+                    (gen_time_total as f64) / (count as f64),
+                );
+                gen_time_total = 0;
+                last_log = Instant::now();
+                count = 0;
+            }
+            if iterations != 0 && count >= iterations {
+                break;
+            }
+        }
+    } else {
+        /*
+        let mut last_log = Instant::now();
+        let mut count = 0;
+        let mut error_count = 0;
+        let mut gen_time_total: u128 = 0;
+        loop {
             let t_start = Instant::now();
 
             if params.data_type == DataType::Random {
@@ -298,22 +436,60 @@ fn run_dos(
                 error_count += 1;
             }
             gen_time_total += t_start.elapsed().as_micros();
+            count += 1;
+            if last_log.elapsed().as_millis() > 5_000 {
+                info!("count: {} errors: {}", count, error_count);
+                info!(
+                    "tps: {}, total: {}",
+                    count as f32 / 1.0,
+                    (gen_time_total as f64) / (count as f64),
+                );
+                gen_time_total = 0;
+                last_log = Instant::now();
+                count = 0;
+            }
+            if iterations != 0 && count >= iterations {
+                break;
+            }
         }
-        count += 1;
-        if last_log.elapsed().as_millis() > 5_000 {
-            info!("count: {} errors: {}", count, error_count);
-            info!(
-                "tps: {}, total: {}",
-                count as f32 / 1.0,
-                (gen_time_total as f64) / (count as f64),
-            );
-            gen_time_total = 0;
-            last_log = Instant::now();
-            count = 0;
+        */
+        let (tx_sender, tx_receiver) = unbounded();
+        let (stats_sender, stats_receiver) = unbounded();
+
+        let num_gen_threads: usize = 4;
+
+        let sender_thread = sender(tx_receiver, &stats_sender, num_gen_threads, &target);
+
+        let stats_thread = statistics_sampler(stats_receiver);
+
+        let max_iter_per_thread = iterations / num_gen_threads;
+
+        let rpc_client = Arc::new(rpc_client.unwrap());
+        let tx_generator_threads: Vec<_> = (0..num_gen_threads)
+            .into_iter()
+            .map(|_| {
+                tx_generator(
+                    &tx_sender,
+                    max_iter_per_thread,
+                    transaction_generator.as_mut().unwrap(),
+                    //&payer,
+                    &rpc_client,
+                )
+            })
+            .collect();
+
+        if let Err(err) = stats_thread.join() {
+            println!("join() failed with: {:?}", err);
         }
-        if iterations != 0 && count >= iterations {
-            break;
+        if let Err(err) = sender_thread.join() {
+            println!("join() failed with: {:?}", err);
         }
+        for t_generator in tx_generator_threads {
+            if let Err(err) = t_generator.join() {
+                println!("join() failed with: {:?}", err);
+            }
+        }
+        println!("This is the end");
     }
 }
 
@@ -360,7 +536,7 @@ struct DosClientParameters {
     transaction_params: TransactionParams,
 }
 
-#[derive(Args, Serialize, Deserialize, Debug, Default)]
+#[derive(Args, Serialize, Deserialize, Debug, Default, Clone)]
 #[clap(rename_all = "kebab-case")]
 struct TransactionParams {
     #[clap(
@@ -598,7 +774,7 @@ pub mod test {
         run_dos(
             &nodes_slice,
             50000,
-            Some(&cluster.funding_keypair),
+            None, //Some(&cluster.funding_keypair),
             DosClientParameters {
                 entrypoint_addr: cluster.entry_point_info.gossip,
                 mode: Mode::Tpu,
