@@ -65,7 +65,7 @@ fn get_repair_contact(nodes: &[ContactInfo]) -> ContactInfo {
 }
 
 enum TxMsg {
-    Tx(Transaction),
+    Tx(Vec<Transaction>),
     Exit,
 }
 
@@ -73,6 +73,8 @@ enum StatsMsg {
     Count(u32),
     Exit,
 }
+
+static BATCH_SIZE: usize = 1000;
 
 fn sender(
     tx_receiver: Receiver<TxMsg>,
@@ -90,22 +92,24 @@ fn sender(
         let mut tt = 0;
         loop {
             match tx_receiver.recv() {
-                Ok(TxMsg::Tx(tx)) => {
-                    // serialize and send
+                Ok(TxMsg::Tx(txs)) => {
                     let t = Instant::now();
-                    let data = bincode::serialize(&tx).unwrap();
-                    let res = socket.send_to(&data, target);
-                    if res.is_err() {
-                        error_count += 1;
+                    for tx in txs {
+                        // serialize and send
+                        let data = bincode::serialize(&tx).unwrap();
+                        let res = socket.send_to(&data, target);
+                        if res.is_err() {
+                            error_count += 1;
+                        }
+
+                        count += 1;
+                        //if t_stats.elapsed().as_millis() > 5_000 {
+                        //    let _ = stats_sender.send(StatsMsg::Count(count));
+                        //   t_stats = Instant::now();
+                        //    count = 0;
+                        //}
                     }
                     tt += t.elapsed().as_millis();
-
-                    count += 1;
-                    //if t_stats.elapsed().as_millis() > 5_000 {
-                    //    let _ = stats_sender.send(StatsMsg::Count(count));
-                    //   t_stats = Instant::now();
-                    //    count = 0;
-                    //}
                 }
                 Ok(TxMsg::Exit) => {
                     info!("Worker is done");
@@ -169,14 +173,15 @@ fn tx_generator(
         loop {
             let t = Instant::now();
 
-            let tx = gen.generate(
-                //*payer,
-                &rpc_client,
-            );
+            let txs: Vec<Transaction> = (0..BATCH_SIZE)
+                .into_iter()
+                .map(|_| gen.generate(&rpc_client))
+                .collect();
+
             tt += t.elapsed().as_millis();
 
-            let _ = tx_sender.send(TxMsg::Tx(tx));
-            cnt += 1;
+            let _ = tx_sender.send(TxMsg::Tx(txs));
+            cnt += BATCH_SIZE;
             if cnt >= max_iter_per_thread {
                 let _ = tx_sender.send(TxMsg::Exit);
                 break;
