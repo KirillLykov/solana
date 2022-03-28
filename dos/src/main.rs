@@ -87,28 +87,35 @@ fn sender(
         let mut t_stats = Instant::now();
         let mut count = 0;
         let mut error_count = 0;
+        let mut tt = 0;
         loop {
             match tx_receiver.recv() {
                 Ok(TxMsg::Tx(tx)) => {
                     // serialize and send
+                    let t = Instant::now();
                     let data = bincode::serialize(&tx).unwrap();
                     let res = socket.send_to(&data, target);
                     if res.is_err() {
                         error_count += 1;
                     }
+                    tt += t.elapsed().as_millis();
 
                     count += 1;
-                    if t_stats.elapsed().as_millis() > 5_000 {
-                        let _ = stats_sender.send(StatsMsg::Count(count));
-                        t_stats = Instant::now();
-                        count = 0;
-                    }
+                    //if t_stats.elapsed().as_millis() > 5_000 {
+                    //    let _ = stats_sender.send(StatsMsg::Count(count));
+                    //   t_stats = Instant::now();
+                    //    count = 0;
+                    //}
                 }
                 Ok(TxMsg::Exit) => {
                     info!("Worker is done");
                     n_alive_threads -= 1;
                     if n_alive_threads == 0 {
                         info!("Exit sender");
+                        let t = (t_stats.elapsed().as_millis() as f64) / 1000.0;
+                        info!("AA = {}, T = {}, TPX = {}", count, t, (count as f64) / t);
+
+                        info!("BB = {}", tt);
                         let _ = stats_sender.send(StatsMsg::Exit);
                         break;
                     }
@@ -123,18 +130,20 @@ fn statistics_sampler(stats_receiver: Receiver<StatsMsg>) -> thread::JoinHandle<
     thread::spawn(move || {
         let mut t_report = Instant::now();
         let mut total = 0;
+        let mut avg_total = 0;
         loop {
             match stats_receiver.recv() {
                 Ok(StatsMsg::Count(num)) => {
                     total += num;
                     if t_report.elapsed().as_millis() > 10_000 {
+                        avg_total += total;
                         info!("stats {} tps", total / 10);
                         total = 0;
                         t_report = Instant::now();
                     }
                 }
                 Ok(StatsMsg::Exit) => {
-                    info!("Stats worker is done with stats: {}", total);
+                    info!("Stats worker is done with stats: {}", avg_total);
                     break;
                 }
                 _ => panic!("AAA"),
@@ -153,20 +162,32 @@ fn tx_generator(
     let tx_sender = tx_sender.clone();
     let mut gen = gen.clone();
     let rpc_client = rpc_client.clone(); // TODO remove later, use thread for blockhashes
+    let mut tt = 0;
     thread::spawn(move || {
         let mut cnt = 0;
+        let t_report = Instant::now();
         loop {
+            let t = Instant::now();
+
             let tx = gen.generate(
                 //*payer,
                 &rpc_client,
             );
+            tt += t.elapsed().as_millis();
+
             let _ = tx_sender.send(TxMsg::Tx(tx));
+            cnt += 1;
             if cnt >= max_iter_per_thread {
                 let _ = tx_sender.send(TxMsg::Exit);
                 break;
             }
-            cnt += 1;
         }
+        info!("CNT = {}, time = {}", cnt, t_report.elapsed().as_millis());
+        info!(
+            "TPS = {}",
+            ((cnt as f64) * 1000.0) / (t_report.elapsed().as_millis() as f64)
+        );
+        info!("CC = {}", tt);
     })
 }
 
