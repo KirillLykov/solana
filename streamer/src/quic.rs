@@ -28,6 +28,8 @@ use {
     },
 };
 
+use futures_util::StreamExt;
+
 pub const MAX_STAKED_CONNECTIONS: usize = 2000;
 pub const MAX_UNSTAKED_CONNECTIONS: usize = 500;
 const NUM_QUIC_STREAMER_WORKER_THREADS: usize = 4;
@@ -622,7 +624,7 @@ mod test {
     use {
         super::*,
         crossbeam_channel::unbounded,
-        quinn::{ClientConfig, NewConnection},
+        quinn::{ClientConfig, NewConnection, TransportConfig},
         solana_sdk::quic::QUIC_KEEP_ALIVE_MS,
         std::{net::SocketAddr, time::Instant},
     };
@@ -661,7 +663,7 @@ mod test {
         transport_config.max_idle_timeout(Some(timeout));
         transport_config.keep_alive_interval(Some(Duration::from_millis(QUIC_KEEP_ALIVE_MS)));
 
-        config.transport_config(Arc::new(transport_config));
+        config.transport = Arc::new(transport_config);
 
         config
     }
