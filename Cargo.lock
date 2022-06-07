@@ -4764,6 +4764,7 @@ dependencies = [
  "solana-measure",
  "solana-metrics",
  "solana-net-utils",
+ "solana-perf",
  "solana-sdk 1.11.1",
  "solana-streamer",
  "solana-transaction-status",
