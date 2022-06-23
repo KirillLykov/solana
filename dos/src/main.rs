@@ -245,24 +245,29 @@ impl TransactionGenerator {
 // Here we generate them in `num_gen_threads` threads.
 //
 enum TransactionMsg {
-    Transaction(Vec<Vec<u8>>, u64),
+    //Transaction(Vec<Vec<u8>>, u64),
+    Transaction(Vec<Transaction>, u64),
     Exit,
 }
 /// number of transactions in one batch for sendmmsg
 const SEND_BATCH_MAX_SIZE: usize = 1 << 14;
 
-fn create_sender_thread(
+fn create_sender_thread<T: 'static + BenchTpsClient + Send + Sync>(
     tx_receiver: Receiver<TransactionMsg>,
     mut n_alive_threads: usize,
     target: &SocketAddr,
     tpu_use_quic: bool,
+    client: Option<&Arc<T>>,
 ) -> thread::JoinHandle<()> {
     //TODO(klykov): check if there is any performance penalty for using ConnectionCache
     //let target = target.clone();
     //let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-    let tpu_use_quic = UseQUIC::new(tpu_use_quic).expect("Failed to initialize QUIC flags");
-    let connection_cache = ConnectionCache::new(tpu_use_quic, DEFAULT_TPU_CONNECTION_POOL_SIZE);
-    let connection = connection_cache.get_connection(target);
+
+    //let tpu_use_quic = UseQUIC::new(tpu_use_quic).expect("Failed to initialize QUIC flags");
+    //let connection_cache = ConnectionCache::new(tpu_use_quic, DEFAULT_TPU_CONNECTION_POOL_SIZE);
+    //let connection = connection_cache.get_connection(target);
+
+    let client = client.unwrap().clone();
 
     let timer_receiver = tick(Duration::from_millis(SAMPLE_PERIOD_MS as u64));
 
@@ -273,6 +278,7 @@ fn create_sender_thread(
     thread::Builder::new().name("Sender".to_string()).spawn(move || {
         let mut count: usize = 0;
         let mut error_count = 0;
+        let client = client.clone();
         //let client_stats = ClientStats::default();
 
         loop {
@@ -283,7 +289,8 @@ fn create_sender_thread(
                             let len = data.len();
                             let mut measure_send_txs = Measure::start("measure_send_txs");
                             //let res = client.send_wire_transaction_batch(&data, &client_stats);
-                            let res = connection.send_wire_transaction_batch_async(data);
+                            //let res = connection.send_wire_transaction_batch_async(data);
+                            let res = client.send_batch(data);
 
                             measure_send_txs.stop();
                             time_send_ns += measure_send_txs.as_ns();
@@ -368,7 +375,8 @@ fn create_generator_thread<T: 'static + BenchTpsClient + Send + Sync>(
             let mut total_count = 0;
             loop {
                 let send_batch_size = get_send_batch_size(max_iterations_per_thread, total_count);
-                let mut data = Vec::<Vec<u8>>::with_capacity(SEND_BATCH_MAX_SIZE);
+                //let mut data = Vec::<Vec<u8>>::with_capacity(SEND_BATCH_MAX_SIZE);
+                let mut data = Vec::<Transaction>::with_capacity(SEND_BATCH_MAX_SIZE);
                 let mut measure_generate_txs = Measure::start("measure_generate_txs");
                 for _ in 0..send_batch_size {
                     let chunk_keypairs = if generate_keypairs {
@@ -389,7 +397,8 @@ fn create_generator_thread<T: 'static + BenchTpsClient + Send + Sync>(
                         chunk_keypairs,
                         client.as_ref(),
                     );
-                    data.push(bincode::serialize(&tx).unwrap());
+                    data.push(tx);
+                    //data.push(bincode::serialize(&tx).unwrap());
                 }
                 measure_generate_txs.stop();
 
@@ -558,7 +567,7 @@ fn get_permutation_size(num_signatures: Option<&usize>, num_instructions: Option
 fn run_dos_transactions<T: 'static + BenchTpsClient + Send + Sync>(
     target: SocketAddr,
     iterations: usize,
-    client: Option<Arc<T>>,
+    client: Option<Arc<T>>, // TODO(klykov) should it be Option?
     transaction_params: TransactionParams,
     tpu_use_quic: bool,
     num_gen_threads: usize,
@@ -575,7 +584,13 @@ fn run_dos_transactions<T: 'static + BenchTpsClient + Send + Sync>(
     let mut transaction_generator = TransactionGenerator::new(transaction_params);
     let (tx_sender, tx_receiver) = unbounded();
 
-    let sender_thread = create_sender_thread(tx_receiver, num_gen_threads, &target, tpu_use_quic);
+    let sender_thread = create_sender_thread(
+        tx_receiver,
+        num_gen_threads,
+        &target,
+        tpu_use_quic,
+        client.as_ref(),
+    );
     let mut thread_id = 0;
     let tx_generator_threads: Vec<_> = payers
         .into_iter()
