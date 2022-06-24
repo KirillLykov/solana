@@ -66,7 +66,7 @@ use {
         stake,
         system_instruction::{self, SystemInstruction},
         system_program,
-        transaction::Transaction,
+        transaction::{Transaction, VersionedTransaction},
     },
     solana_streamer::socket::SocketAddrSpace,
     std::{
@@ -246,7 +246,7 @@ impl TransactionGenerator {
 //
 enum TransactionMsg {
     //Transaction(Vec<Vec<u8>>, u64),
-    Transaction(Vec<Transaction>, u64),
+    Transaction(Vec<VersionedTransaction>, u64),
     Exit,
 }
 /// number of transactions in one batch for sendmmsg
@@ -290,7 +290,7 @@ fn create_sender_thread<T: 'static + BenchTpsClient + Send + Sync>(
                             let mut measure_send_txs = Measure::start("measure_send_txs");
                             //let res = client.send_wire_transaction_batch(&data, &client_stats);
                             //let res = connection.send_wire_transaction_batch_async(data);
-                            let res = client.send_batch(data);
+                            let res = client.send_batch_versioned(data);
 
                             measure_send_txs.stop();
                             time_send_ns += measure_send_txs.as_ns();
@@ -376,7 +376,7 @@ fn create_generator_thread<T: 'static + BenchTpsClient + Send + Sync>(
             loop {
                 let send_batch_size = get_send_batch_size(max_iterations_per_thread, total_count);
                 //let mut data = Vec::<Vec<u8>>::with_capacity(SEND_BATCH_MAX_SIZE);
-                let mut data = Vec::<Transaction>::with_capacity(SEND_BATCH_MAX_SIZE);
+                let mut data = Vec::<VersionedTransaction>::with_capacity(SEND_BATCH_MAX_SIZE);
                 let mut measure_generate_txs = Measure::start("measure_generate_txs");
                 for _ in 0..send_batch_size {
                     let chunk_keypairs = if generate_keypairs {
@@ -397,7 +397,7 @@ fn create_generator_thread<T: 'static + BenchTpsClient + Send + Sync>(
                         chunk_keypairs,
                         client.as_ref(),
                     );
-                    data.push(tx);
+                    data.push(VersionedTransaction::from(tx));
                     //data.push(bincode::serialize(&tx).unwrap());
                 }
                 measure_generate_txs.stop();
