@@ -245,8 +245,7 @@ impl TransactionGenerator {
 // Here we generate them in `num_gen_threads` threads.
 //
 enum TransactionMsg {
-    //Transaction(Vec<Vec<u8>>, u64),
-    Transaction(Vec<Transaction>, u64),
+    Transaction(Vec<Vec<u8>>, u64),
     Exit,
 }
 /// number of transactions in one batch for sendmmsg
@@ -263,15 +262,14 @@ fn create_sender_thread<T: 'static + BenchTpsClient + Send + Sync>(
     //let target = target.clone();
     //let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
 
-    //let tpu_use_quic = UseQUIC::new(tpu_use_quic).expect("Failed to initialize QUIC flags");
-    //let connection_cache = ConnectionCache::new(tpu_use_quic, DEFAULT_TPU_CONNECTION_POOL_SIZE);
-    //let connection = connection_cache.get_connection(target);
+    let tpu_use_quic = UseQUIC::new(tpu_use_quic).expect("Failed to initialize QUIC flags");
+    let connection_cache = ConnectionCache::new(tpu_use_quic, DEFAULT_TPU_CONNECTION_POOL_SIZE);
+    let connection = connection_cache.get_connection(target);
 
     let client = client.unwrap().clone();
 
     let timer_receiver = tick(Duration::from_millis(SAMPLE_PERIOD_MS as u64));
 
-    //let client = UdpTpuConnection::new(socket, target);
     let mut time_send_ns = 0;
     let mut time_generate_ns = 0;
 
@@ -289,8 +287,7 @@ fn create_sender_thread<T: 'static + BenchTpsClient + Send + Sync>(
                             let len = data.len();
                             let mut measure_send_txs = Measure::start("measure_send_txs");
                             //let res = client.send_wire_transaction_batch(&data, &client_stats);
-                            //let res = connection.send_wire_transaction_batch_async(data);
-                            let res = client.send_batch(data);
+                            let res = connection.send_wire_transaction_batch_async(data);
 
                             measure_send_txs.stop();
                             time_send_ns += measure_send_txs.as_ns();
@@ -376,7 +373,7 @@ fn create_generator_thread<T: 'static + BenchTpsClient + Send + Sync>(
             loop {
                 let send_batch_size = get_send_batch_size(max_iterations_per_thread, total_count);
                 //let mut data = Vec::<Vec<u8>>::with_capacity(SEND_BATCH_MAX_SIZE);
-                let mut data = Vec::<Transaction>::with_capacity(SEND_BATCH_MAX_SIZE);
+                let mut data = Vec::<Vec<u8>>::with_capacity(SEND_BATCH_MAX_SIZE);
                 let mut measure_generate_txs = Measure::start("measure_generate_txs");
                 for _ in 0..send_batch_size {
                     let chunk_keypairs = if generate_keypairs {
@@ -397,8 +394,7 @@ fn create_generator_thread<T: 'static + BenchTpsClient + Send + Sync>(
                         chunk_keypairs,
                         client.as_ref(),
                     );
-                    data.push(tx);
-                    //data.push(bincode::serialize(&tx).unwrap());
+                    data.push(bincode::serialize(&tx).unwrap());
                 }
                 measure_generate_txs.stop();
 
