@@ -559,7 +559,7 @@ fn get_nonce_accounts<T: 'static + BenchTpsClient + Send + Sync + ?Sized>(
 }
 
 fn get_nonce_blockhashes<T: 'static + BenchTpsClient + Send + Sync + ?Sized>(
-    client: Arc<T>,
+    client: &Arc<T>,
     nonce_pubkeys: &[Pubkey],
 ) -> Vec<Hash> {
     let num_accounts = nonce_pubkeys.len();
@@ -580,7 +580,7 @@ fn get_nonce_blockhashes<T: 'static + BenchTpsClient + Send + Sync + ?Sized>(
 
         let num_unprocessed_before = unprocessed.len();
         info!("Request {} durable nonce accounts", num_unprocessed_before);
-        let accounts = get_nonce_accounts(&client, nonce_pubkeys);
+        let accounts = get_nonce_accounts(client, nonce_pubkeys);
         for (account, index) in accounts.iter().zip(request_indexes.iter()) {
             if let Some(nonce_account) = account {
                 let nonce_data = nonce_utils::data_from_account(nonce_account).unwrap();
@@ -599,6 +599,7 @@ fn get_nonce_blockhashes<T: 'static + BenchTpsClient + Send + Sync + ?Sized>(
     blockhashes
 }
 
+const ACCOUNT_CHUNK_SIZE: usize = 1024;
 fn generate_nonced_system_txs<T: 'static + BenchTpsClient + Send + Sync + ?Sized>(
     client: Arc<T>,
     source: &[&Keypair],
@@ -614,7 +615,12 @@ fn generate_nonced_system_txs<T: 'static + BenchTpsClient + Send + Sync + ?Sized
             .iter()
             .map(|keypair| keypair.pubkey())
             .collect();
-        let blockhashes = get_nonce_blockhashes(client, &pubkeys);
+
+        let blockhashes: Vec<Hash> = pubkeys
+            .chunks(ACCOUNT_CHUNK_SIZE)
+            .map(|pubkeys| get_nonce_blockhashes(&client, &pubkeys))
+            .flatten()
+            .collect();
 
         for i in 0..length {
             transactions.push((
@@ -631,7 +637,11 @@ fn generate_nonced_system_txs<T: 'static + BenchTpsClient + Send + Sync + ?Sized
         }
     } else {
         let pubkeys: Vec<Pubkey> = dest_nonce.iter().map(|keypair| keypair.pubkey()).collect();
-        let blockhashes = get_nonce_blockhashes(client, &pubkeys);
+        let blockhashes: Vec<Hash> = pubkeys
+            .chunks(ACCOUNT_CHUNK_SIZE)
+            .map(|pubkeys| get_nonce_blockhashes(&client, &pubkeys))
+            .flatten()
+            .collect();
 
         for i in 0..length {
             transactions.push((
