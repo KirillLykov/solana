@@ -48,7 +48,7 @@ solana-bench-tps)
   clientCommand="\
     solana-bench-tps \
       --entrypoint $entrypointIp:8001 \
-      --duration 7500 \
+      --duration 1200 \
       --sustained \
       --threads $threadCount \
       $benchTpsExtraArgs \
