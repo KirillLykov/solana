@@ -426,10 +426,17 @@ fn get_cluster_shred_version(entrypoints: &[SocketAddr]) -> Option<u16> {
     }
     None
 }
+use std::process;
 
 pub fn main() {
 
-    let _profiler = dhat::Profiler::new_heap();
+    let mut profiler = Some(dhat::Profiler::new_heap());
+    ctrlc::set_handler(move || {
+        println!("received Ctrl+C!");
+        drop(profiler.take());
+        process::exit(0x0100);
+    })
+    .expect("Error setting Ctrl-C handler");
 
     let default_dynamic_port_range =
         &format!("{}-{}", VALIDATOR_PORT_RANGE.0, VALIDATOR_PORT_RANGE.1);
