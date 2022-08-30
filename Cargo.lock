@@ -13,6 +13,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "addr2line"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9ecd88a8c8378ca913a680cd98f0f13ac67383d35993f86c90a70e3f137816b"
+dependencies = [
+ "gimli",
+]
+
+[[package]]
 name = "adler"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -338,6 +347,21 @@ dependencies = [
  "pin-project-lite",
  "rand 0.8.5",
  "tokio",
+]
+
+[[package]]
+name = "backtrace"
+version = "0.3.66"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab84319d616cfb654d03394f38ab7e6f0919e181b1b57e1fd15e7fb4077d9a7"
+dependencies = [
+ "addr2line",
+ "cc",
+ "cfg-if 1.0.0",
+ "libc",
+ "miniz_oxide",
+ "object",
+ "rustc-demangle",
 ]
 
 [[package]]
@@ -1084,11 +1108,11 @@ dependencies = [
 
 [[package]]
 name = "ctrlc"
-version = "3.2.2"
+version = "3.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b37feaa84e6861e00a1f5e5aa8da3ee56d605c9992d33e082786754828e20865"
+checksum = "1d91974fbbe88ec1df0c24a4f00f99583667a7e2e6272b2b92d294d81e462173"
 dependencies = [
- "nix 0.24.2",
+ "nix",
  "winapi 0.3.9",
 ]
 
@@ -1174,6 +1198,21 @@ dependencies = [
  "quote 1.0.18",
  "rustc_version 0.3.3",
  "syn 1.0.98",
+]
+
+[[package]]
+name = "dhat"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47003dc9f6368a88e85956c3b2573a7e6872746a3e5d762a8885da3a136a0381"
+dependencies = [
+ "backtrace",
+ "lazy_static",
+ "parking_lot 0.11.2",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "thousands",
 ]
 
 [[package]]
@@ -1784,6 +1823,12 @@ dependencies = [
  "wasi 0.10.2+wasi-snapshot-preview1",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "gimli"
+version = "0.26.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22030e2c5a68ec659fde1e949a745124b48e6fa8b045b7ed5bd1fe4ccc5c4e5d"
 
 [[package]]
 name = "glob"
@@ -2736,17 +2781,6 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.24.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "195cdbc1741b8134346d515b3a56a1c94b0912758009cfd53f99ea0f57b065fc"
-dependencies = [
- "bitflags",
- "cfg-if 1.0.0",
- "libc",
-]
-
-[[package]]
-name = "nix"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e322c04a9e3440c327fca7b6c8a63e6890a32fa2ad689db972425f07e0d22abb"
@@ -2929,6 +2963,15 @@ name = "number_prefix"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
+
+[[package]]
+name = "object"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21158b2c33aa6d4561f1c0a6ea283ca92bc54802a93b263e910746d679a7eb53"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "oid-registry"
@@ -5391,7 +5434,7 @@ dependencies = [
  "dirs-next",
  "indicatif",
  "lazy_static",
- "nix 0.25.0",
+ "nix",
  "reqwest",
  "semver 1.0.13",
  "serde",
@@ -5655,7 +5698,7 @@ dependencies = [
  "clap 3.1.8",
  "crossbeam-channel",
  "log",
- "nix 0.25.0",
+ "nix",
  "rand 0.7.3",
  "serde",
  "serde_derive",
@@ -5692,7 +5735,7 @@ dependencies = [
  "libc",
  "log",
  "matches",
- "nix 0.25.0",
+ "nix",
  "rand 0.7.3",
  "rayon",
  "serde",
@@ -6403,7 +6446,7 @@ dependencies = [
  "itertools",
  "libc",
  "log",
- "nix 0.25.0",
+ "nix",
  "pem",
  "percentage",
  "pkcs8",
@@ -6429,7 +6472,7 @@ dependencies = [
  "clap 2.33.3",
  "libc",
  "log",
- "nix 0.25.0",
+ "nix",
  "solana-logger 1.12.0",
  "solana-version",
  "sysctl",
@@ -6617,6 +6660,8 @@ dependencies = [
  "console",
  "core_affinity",
  "crossbeam-channel",
+ "ctrlc",
+ "dhat",
  "fd-lock",
  "indicatif",
  "jsonrpc-core",
@@ -7174,6 +7219,12 @@ dependencies = [
  "quote 1.0.18",
  "syn 1.0.98",
 ]
+
+[[package]]
+name = "thousands"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bf63baf9f5039dadc247375c29eb13706706cfde997d0330d05aa63a77d8820"
 
 [[package]]
 name = "thread-scoped"
