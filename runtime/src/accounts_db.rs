@@ -6584,8 +6584,9 @@ impl AccountsDb {
         let width = max_slot_inclusive - slot0;
         // 2 is for 2 special chunks - unaligned slots at the beginning and end
         let chunks = ancient_slot_count + 2 + (width as Slot / MAX_ITEMS_PER_CHUNK);
-        (0..chunks)
-            .into_par_iter()
+        let mut range_sum = 0;
+        let res = (0..chunks)
+            .into_iter()
             .map(|mut chunk| {
                 let mut scanner = scanner.clone();
                 // calculate start, end_exclusive
@@ -6628,6 +6629,7 @@ impl AccountsDb {
                 if eligible_for_caching || config.store_detailed_debug_info_on_failure {
                     let range = bin_range.end - bin_range.start;
                     scanner.init_accum(range);
+                    range_sum += range;
                 }
 
                 let slots_per_epoch = config
@@ -6757,7 +6759,14 @@ impl AccountsDb {
                 r
             })
             .filter(|x| !x.is_empty())
-            .collect()
+            .collect();
+
+        info!(
+            "@@@ range mean {}, num chunks {}",
+            range_sum / (chunks as usize),
+            chunks
+        );
+        return res;
     }
 
     /// storages are sorted by slot and have range info.
