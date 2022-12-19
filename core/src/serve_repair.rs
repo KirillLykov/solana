@@ -506,7 +506,7 @@ impl ServeRepair {
                     }
                 };
 
-                let from_addr = packet.meta().socket_addr();
+                let from_addr = packet.meta.socket_addr();
                 if !ContactInfo::is_valid_address(&from_addr, &socket_addr_space) {
                     stats.err_malformed += 1;
                     continue;
