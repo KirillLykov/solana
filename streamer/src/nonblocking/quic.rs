@@ -174,13 +174,14 @@ fn get_connection_stake(
             if der_certs.len() == 1 {
                 // Use the client cert only if it is self signed and the chain length is 1
                 get_pubkey_from_tls_certificate(&der_certs[0]).and_then(|pubkey| {
-                    debug!("Peer public key is {:?}", pubkey);
-
+                    //debug!("Peer public key is {:?}", pubkey);
                     let staked_nodes = staked_nodes.read().unwrap();
                     let total_stake = staked_nodes.total_stake;
                     let max_stake = staked_nodes.max_stake;
                     let min_stake = staked_nodes.min_stake;
                     let stake = staked_nodes.pubkey_stake_map.get(&pubkey);
+                    info!("Peer public key is {:?}, total_stake = {}, min_stake = {}, max_stake = {}", pubkey, total_stake, min_stake, max_stake);
+
                     if let Some(stake) = stake {
                         Some((pubkey, *stake, total_stake, max_stake, min_stake))
                     } else if let Some(default_stake) = default_stake {
@@ -294,8 +295,8 @@ fn handle_and_cache_new_connection(
 
         let remote_addr = connection.remote_address();
 
-        debug!(
-            "Peer type: {:?}, stake {}, total stake {}, max streams {} receive_window {:?} from peer {}",
+        info!(
+            "@ Peer type: {:?}, stake {}, total stake {}, max streams {} receive_window {:?} from peer {}",
             connection_table_l.peer_type,
             params.stake,
             params.total_stake,
@@ -356,6 +357,7 @@ fn prune_unstaked_connections_and_add_new_connection(
     params: &NewConnectionHandlerParams,
     wait_for_chunk_timeout_ms: u64,
 ) -> Result<(), ConnectionHandlerError> {
+    info!("@ prune_unstaked_connections_and_add_new_connection");
     let stats = params.stats.clone();
     if max_connections > 0 {
         prune_unstaked_connection_table(&mut connection_table_l, max_connections, stats);
@@ -463,9 +465,12 @@ async fn setup_connection(
                     },
                 );
 
+            info!("@ STAKE {}", params.stake);
+
             if params.stake > 0 {
                 let mut connection_table_l = staked_connection_table.lock().unwrap();
                 if connection_table_l.total_size >= max_staked_connections {
+                    info!("@ Trying to prune connection");
                     let num_pruned = connection_table_l.prune_random(params.stake);
                     stats.num_evictions.fetch_add(num_pruned, Ordering::Relaxed);
                 }
@@ -478,11 +483,13 @@ async fn setup_connection(
                         &params,
                         wait_for_chunk_timeout_ms,
                     ) {
+                        info!("@ Added staked connection");
                         stats
                             .connection_added_from_staked_peer
                             .fetch_add(1, Ordering::Relaxed);
                     }
                 } else {
+                    info!("@ Failed staked connection, try unstaked");
                     // If we couldn't prune a connection in the staked connection table, let's
                     // put this connection in the unstaked connection table. If needed, prune a
                     // connection from the unstaked connection table.
@@ -494,6 +501,7 @@ async fn setup_connection(
                         &params,
                         wait_for_chunk_timeout_ms,
                     ) {
+                        info!("@ Success unstaked");
                         stats
                             .connection_added_from_staked_peer
                             .fetch_add(1, Ordering::Relaxed);
@@ -514,6 +522,7 @@ async fn setup_connection(
                 &params,
                 wait_for_chunk_timeout_ms,
             ) {
+                info!("@ Success unstaked 2");
                 stats
                     .connection_added_from_unstaked_peer
                     .fetch_add(1, Ordering::Relaxed);
