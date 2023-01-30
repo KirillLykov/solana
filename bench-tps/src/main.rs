@@ -19,13 +19,15 @@ use {
     solana_gossip::gossip_service::{discover_cluster, get_client, get_multi_client},
     solana_rpc_client::rpc_client::RpcClient,
     solana_sdk::{
+        signature::{Keypair, Signer},
         commitment_config::CommitmentConfig, fee_calculator::FeeRateGovernor, pubkey::Pubkey,
         system_program,
     },
     solana_streamer::socket::SocketAddrSpace,
+    solana_streamer::streamer::StakedNodes,
     std::{
-        collections::HashMap, fs::File, io::prelude::*, net::SocketAddr, path::Path, process::exit,
-        sync::Arc,
+        collections::HashMap, fs::File, io::prelude::*, net::{IpAddr, Ipv4Addr, SocketAddr}, path::Path, process::exit,
+        sync::{Arc, RwLock},
     },
 };
 
@@ -34,6 +36,7 @@ pub const NUM_SIGNATURES_FOR_TXS: u64 = 100_000 * 60 * 60 * 24 * 7;
 
 #[allow(clippy::too_many_arguments)]
 fn create_client(
+    client_node_id: Keypair,
     external_client_type: &ExternalClientType,
     entrypoint_addr: &SocketAddr,
     json_rpc_url: &str,
@@ -52,7 +55,26 @@ fn create_client(
         )),
         ExternalClientType::ThinClient => {
             let connection_cache = match use_quic {
-                true => Arc::new(ConnectionCache::new(tpu_connection_pool_size)),
+                true => {
+                    //Arc::new(ConnectionCache::new(tpu_connection_pool_size)),
+                    let bind_address = IpAddr::V4(Ipv4Addr::new(147, 75, 87, 167));
+
+                    let mut connection_cache = ConnectionCache::new(tpu_connection_pool_size);
+                    connection_cache
+                        .update_client_certificate(&client_node_id, bind_address)
+                        .expect("Failed to update QUIC client certificates");
+
+                    let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
+                    connection_cache.set_staked_nodes(&staked_nodes, &client_node_id.pubkey());
+                    staked_nodes.write().unwrap().total_stake = 123456789;
+
+                    staked_nodes
+                        .write()
+                        .unwrap()
+                        .pubkey_stake_map
+                        .insert(client_node_id.pubkey(), 202020202);
+                    Arc::new(connection_cache)
+                },
                 false => Arc::new(ConnectionCache::with_udp(tpu_connection_pool_size)),
             };
 
@@ -212,7 +234,11 @@ fn main() {
             None
         };
 
+    let b = id.to_bytes();
+    let id_copy = Keypair::from_bytes(&b).unwrap();
+
     let client = create_client(
+        id_copy,
         external_client_type,
         entrypoint_addr,
         json_rpc_url,
