@@ -180,7 +180,7 @@ fn get_connection_stake(
                     let max_stake = staked_nodes.max_stake;
                     let min_stake = staked_nodes.min_stake;
                     let stake = staked_nodes.pubkey_stake_map.get(&pubkey);
-                    info!("Peer public key is {:?}, total_stake = {}, min_stake = {}, max_stake = {}", pubkey, total_stake, min_stake, max_stake);
+                    info!("@ Peer public key is {:?}, total_stake = {}, min_stake = {}, max_stake = {}", pubkey, total_stake, min_stake, max_stake);
 
                     if let Some(stake) = stake {
                         Some((pubkey, *stake, total_stake, max_stake, min_stake))
