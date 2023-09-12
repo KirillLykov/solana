@@ -312,17 +312,17 @@ fn handle_and_cache_new_connection(
         params.total_stake,
     ) as u64)
     {
-        connection.set_max_concurrent_uni_streams(max_uni_streams);
-        let receive_window = compute_recieve_window(
-            params.max_stake,
-            params.min_stake,
-            connection_table_l.peer_type,
-            params.stake,
-        );
+        //connection.set_max_concurrent_uni_streams(max_uni_streams);
+        let receive_window: Option<u32> = None; //compute_recieve_window(
+                                                //    params.max_stake,
+                                                //    params.min_stake,
+                                                //    connection_table_l.peer_type,
+                                                //    params.stake,
+                                                //);
 
-        if let Ok(receive_window) = receive_window {
-            connection.set_receive_window(receive_window);
-        }
+        //if let Ok(receive_window) = receive_window {
+        //    connection.set_receive_window(receive_window);
+        //}
 
         let remote_addr = connection.remote_address();
 
