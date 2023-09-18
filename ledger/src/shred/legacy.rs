@@ -18,12 +18,12 @@ use {
 pub(super) const SIGNED_MESSAGE_OFFSETS: Range<usize> =
     SIZE_OF_SIGNATURE..ShredData::SIZE_OF_PAYLOAD;
 const_assert_eq!(ShredData::SIZE_OF_PAYLOAD, ShredCode::SIZE_OF_PAYLOAD);
-const_assert_eq!(ShredData::SIZE_OF_PAYLOAD, 2460);
-const_assert_eq!(ShredData::CAPACITY, 2283);
+const_assert_eq!(ShredData::SIZE_OF_PAYLOAD, 1228 + 2 * 1232);
+const_assert_eq!(ShredData::CAPACITY, 1051 + 2 * 1232);
 
 // ShredCode::SIZE_OF_HEADERS bytes at the end of data shreds
 // is never used and is not part of erasure coding.
-const_assert_eq!(SIZE_OF_ERASURE_ENCODED_SLICE, 2371);
+const_assert_eq!(SIZE_OF_ERASURE_ENCODED_SLICE, 1139 + 2 * 1232);
 pub(super) const SIZE_OF_ERASURE_ENCODED_SLICE: usize =
     ShredCode::SIZE_OF_PAYLOAD - ShredCode::SIZE_OF_HEADERS;
 

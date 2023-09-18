@@ -13,7 +13,7 @@ use {
 const_assert_eq!(MAX_CODE_SHREDS_PER_SLOT, 32_768);
 pub const MAX_CODE_SHREDS_PER_SLOT: usize = MAX_DATA_SHREDS_PER_SLOT;
 
-const_assert_eq!(ShredCode::SIZE_OF_PAYLOAD, 2460);
+const_assert_eq!(ShredCode::SIZE_OF_PAYLOAD, 1228 + 2 * 1232);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShredCode {

@@ -4452,8 +4452,8 @@ pub mod rpc_obsolete_v1_7 {
 // These values need to be updated if PACKET_DATA_SIZE changes. The correct values can
 // be found by hand or by simply encoding `PACKET_DATA_SIZE` bytes and checking length.
 // `test_max_encoded_tx_goldens` ensures these values are correct.
-const MAX_BASE58_SIZE: usize = 3365;
-const MAX_BASE64_SIZE: usize = 3288;
+const MAX_BASE58_SIZE: usize = 3 * 1683 - 1;
+const MAX_BASE64_SIZE: usize = 3 * 1644;
 
 fn decode_and_deserialize<T>(
     encoded: String,
@@ -8504,7 +8504,7 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64, TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params("invalid base64 encoding: InvalidByte(1640, 33)".to_string())
+            Error::invalid_params("invalid base64 encoding: InvalidByte(4928, 33)".to_string())
         );
 
         let mut tx58 = bs58::encode(&tx_ser).into_string();
@@ -8523,7 +8523,7 @@ pub mod tests {
             decode_and_deserialize::<Transaction>(tx58, TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
             Error::invalid_params(
-                "invalid base58 encoding: InvalidCharacter { character: '!', index: 1680 }"
+                "invalid base58 encoding: InvalidCharacter { character: '!', index: 5045 }"
                     .to_string(),
             )
         );
