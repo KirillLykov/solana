@@ -31,7 +31,7 @@ use {
 };
 
 pub type ProgramRuntimeEnvironment = Arc<BuiltinProgram<InvokeContext<'static>>>;
-pub const MAX_LOADED_ENTRY_COUNT: usize = 256;
+pub const MAX_LOADED_ENTRY_COUNT: usize = 4;
 pub const DELAY_VISIBILITY_SLOT_OFFSET: Slot = 1;
 
 /// Relationship between two fork IDs
