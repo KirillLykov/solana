@@ -204,9 +204,10 @@ fn main() {
 
     let keypair_count = *tx_count * keypair_multiplier;
     if *write_to_client_file {
-        info!("Generating {} keypairs", keypair_count);
+        info!("Generating {keypair_count} keypairs");
         let (mut keypairs, _) = generate_keypairs(id, keypair_count as u64);
         let num_accounts = keypairs.len() as u64;
+        info!("Num accounts {num_accounts}");
         let max_fee = FeeRateGovernor::new(*target_lamports_per_signature, 0)
             .max_lamports_per_signature
             .saturating_add(max_lamports_for_prioritization(compute_unit_price));

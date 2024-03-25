@@ -13,6 +13,7 @@ use {
     rand::distributions::{Distribution, Uniform},
     rayon::prelude::*,
     solana_client::{nonce_utils, rpc_request::MAX_MULTIPLE_ACCOUNTS},
+    solana_measure::measure::Measure,
     solana_metrics::{self, datapoint_info},
     solana_sdk::{
         account::Account,
@@ -1005,9 +1006,13 @@ fn do_tx_transfers<T: BenchTpsClient + ?Sized>(
                 }
             }
 
+            let mut measure_get_blocks = Measure::start("measure_get_blocks");
             if let Err(error) = client.send_batch(transactions) {
                 warn!("send_batch_sync in do_tx_transfers failed: {}", error);
             }
+            measure_get_blocks.stop();
+            let time_get_blocks_us = measure_get_blocks.as_us();
+            info!("Time to send batch: {time_get_blocks_us}us.");
 
             datapoint_info!(
                 "bench-tps-do_tx_transfers",
