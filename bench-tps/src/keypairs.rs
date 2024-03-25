@@ -48,10 +48,6 @@ where
             );
             exit(1);
         }
-        // Sort keypairs so that do_bench_tps() uses the same subset of accounts for each run.
-        // This prevents the amount of storage needed for bench-tps accounts from creeping up
-        // across multiple runs.
-        keypairs.sort_by_key(|x| x.pubkey().to_string());
         fund_keypairs(
             client,
             id,

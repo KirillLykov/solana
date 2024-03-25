@@ -205,7 +205,7 @@ fn main() {
     let keypair_count = *tx_count * keypair_multiplier;
     if *write_to_client_file {
         info!("Generating {} keypairs", keypair_count);
-        let (keypairs, _) = generate_keypairs(id, keypair_count as u64);
+        let (mut keypairs, _) = generate_keypairs(id, keypair_count as u64);
         let num_accounts = keypairs.len() as u64;
         let max_fee = FeeRateGovernor::new(*target_lamports_per_signature, 0)
             .max_lamports_per_signature
@@ -225,6 +225,10 @@ fn main() {
                 },
             );
         });
+        // Sort keypairs so that do_bench_tps() uses the same subset of accounts for each run.
+        // This prevents the amount of storage needed for bench-tps accounts from creeping up
+        // across multiple runs.
+        keypairs.sort_by_key(|x| x.pubkey().to_string());
 
         info!("Writing {}", client_ids_and_stake_file);
         let serialized = serde_yaml::to_string(&accounts).unwrap();
