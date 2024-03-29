@@ -246,11 +246,11 @@ pub struct TpuClient<
     M, // ConnectionManager
     C, // NewConnectionConfig
 > {
-    fanout_slots: u64,
-    leader_tpu_service: LeaderTpuService,
+    pub fanout_slots: u64,
+    pub leader_tpu_service: LeaderTpuService,
     exit: Arc<AtomicBool>,
     rpc_client: Arc<RpcClient>,
-    connection_cache: Arc<ConnectionCache<P, M, C>>,
+    pub connection_cache: Arc<ConnectionCache<P, M, C>>,
 }
 
 /// Helper function which generates futures to all be awaited together for maximum
