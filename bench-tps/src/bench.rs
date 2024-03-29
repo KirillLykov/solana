@@ -15,9 +15,11 @@ use {
     solana_client::{nonce_utils, rpc_request::MAX_MULTIPLE_ACCOUNTS},
     solana_measure::measure::Measure,
     solana_metrics::{self, datapoint_info},
+    solana_rpc_client::rpc_client::RpcClient,
     solana_sdk::{
         account::Account,
         clock::{DEFAULT_MS_PER_SLOT, DEFAULT_S_PER_SLOT, MAX_PROCESSING_AGE},
+        commitment_config::CommitmentConfig,
         compute_budget::ComputeBudgetInstruction,
         hash::Hash,
         instruction::{AccountMeta, Instruction},
@@ -485,6 +487,11 @@ where
         block_data_file.as_deref(),
         transaction_data_file.as_deref(),
     );
+
+    //let send_client = Arc::new(RpcClient::new_with_commitment(
+    //    "http://139.178.82.223:8890".to_string(),
+    //    CommitmentConfig::confirmed(),
+    //));
 
     let sender_threads = create_sender_threads(
         &client,

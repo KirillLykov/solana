@@ -26,6 +26,11 @@ where
     }
     fn send_batch(&self, transactions: Vec<Transaction>) -> Result<()> {
         self.try_send_transaction_batch(&transactions)?;
+        /*let cc = self.connection_cache;
+        let addresses = self
+            .leader_tpu_service
+            .leader_tpu_sockets(self.fanout_slots);
+        */
         Ok(())
     }
     fn get_latest_blockhash(&self) -> Result<Hash> {
@@ -161,3 +166,98 @@ where
             .map_err(|err| err.into())
     }
 }
+
+/*
+mod send_batch_impl {
+    use {
+        bincode::serialize,
+        solana_client::connection_cache::ConnectionCache,
+        solana_sdk::transaction::Transaction,
+        solana_tpu_client::tpu_client::TpuClient,
+        std::{net::SocketAddr, sync::Arc},
+    };
+
+    #[derive(Clone, Debug)]
+    pub struct Config {
+        pub retry_rate_ms: u64,
+        pub leader_forward_count: u64,
+        pub default_max_retries: Option<usize>,
+        pub service_max_retries: usize,
+        /// The batch size for sending transactions in batches
+        pub batch_size: usize,
+        /// How frequently batches are sent
+        pub batch_send_rate_ms: u64,
+        /// When the retry pool exceeds this max size, new transactions are dropped after their first broadcast attempt
+        pub retry_pool_max_size: usize,
+        pub tpu_peers: Option<Vec<SocketAddr>>,
+    }
+
+    /// Process transactions in batch.
+    fn send_transactions_in_batch(
+        //<T: TpuInfo>(
+        //client: &TpuClient,
+        addresses: Vec<&SocketAddr>,
+        //tpu_address: &SocketAddr,
+        transactions: Vec<Transaction>,
+        //leader_info: Option<&T>,
+        connection_cache: &Arc<ConnectionCache>,
+        config: &Config,
+    ) {
+        // Processing the transactions in batch
+        // send_transaction_service uses predefined peers
+        //let mut addresses = config
+        //    .tpu_peers
+        //    .as_ref()
+        //    .map(|addrs| addrs.iter().map(|a| (a, 0)).collect::<Vec<_>>())
+        //    .unwrap_or_default();
+        //let leader_addresses = get_tpu_addresses_with_slots(
+        //    tpu_address,
+        //    leader_info,
+        //    config,
+        //    connection_cache.protocol(),
+        //);
+        //addresses.extend(leader_addresses);
+        // how we can get it from client
+        //let addresses = client
+        //    .leader_tpu_service
+        //    .leader_tpu_sockets(client.fanout_slots);
+
+        let wire_transactions = transactions
+            .into_par_iter()
+            .map(|tx| bincode::serialize(&tx).expect("serialize Transaction in send_batch"))
+            .collect::<Vec<_>>();
+
+        for address in &addresses {
+            send_transactions_with_metrics(address, &wire_transactions, connection_cache);
+        }
+    }
+
+    // in TpuClient, there is a connection cache which is in tpu-client/src/nonblocking/tpu_client.rs::get_leader_sockets
+    // I'm not sure it is very performant.
+    // TODO(klykov): check how performant is this cache (compare with the function below).
+    fn get_tpu_addresses_with_slots<'a, T: TpuInfo>(
+        tpu_address: &'a SocketAddr,
+        leader_info: Option<&'a T>,
+        config: &'a Config,
+        protocol: Protocol,
+    ) -> Vec<(&'a SocketAddr, Slot)> {
+        leader_info
+            .as_ref()
+            .map(|leader_info| {
+                leader_info.get_leader_tpus_with_slots(config.leader_forward_count, protocol)
+            })
+            .filter(|addresses| !addresses.is_empty())
+            .unwrap_or_else(|| vec![(tpu_address, 0)])
+    }
+
+    //fn send_transactions_with_metrics(
+    //    tpu_address: &SocketAddr,
+    //    wire_transactions: &[&[u8]],
+    //    connection_cache: &Arc<ConnectionCache>,
+    //) -> Result<(), TransportError> {
+    //    let wire_transactions = wire_transactions.iter().map(|t| t.to_vec()).collect();
+    //    let conn = connection_cache.get_connection(tpu_address);
+    //    conn.send_data_batch_async(wire_transactions)
+    //}
+}
+*/
