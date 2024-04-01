@@ -352,6 +352,10 @@ fn handle_and_cache_new_connection(
             receive_window,
             remote_addr,
         );
+        //info!(
+        //    "MAX_CONNECTIONS_PER_PEER {}",
+        //    params.max_connections_per_peer
+        //);
 
         if let Some((last_update, stream_exit, stream_counter)) = connection_table_l
             .try_add_connection(

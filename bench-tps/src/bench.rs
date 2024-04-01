@@ -197,7 +197,7 @@ where
             "Signing transactions... {} (reclaim={}, blockhash={:?})",
             tx_count, self.reclaim_lamports_back_to_source_account, blockhash
         );
-        let signing_start = Instant::now();
+        let mut measure_generate = Measure::start("generate");
 
         let source_chunk = &self.account_chunks.source[self.chunk_index];
         let dest_chunk = &self.account_chunks.dest[self.chunk_index];
@@ -227,21 +227,14 @@ where
             )
         };
 
-        let duration = signing_start.elapsed();
-        let ns = duration.as_secs() * 1_000_000_000 + u64::from(duration.subsec_nanos());
-        let bsps = (tx_count) as f64 / ns as f64;
-        let nsps = ns as f64 / (tx_count) as f64;
+        measure_generate.stop();
+        let duration_us = measure_generate.as_us();
+        let us_per_signature = duration_us as f64 / tx_count as f64;
         info!(
-            "Done. {:.2} thousand signatures per second, {:.2} us per signature, {} ms total time, {:?}",
-            bsps * 1_000_000_f64,
-            nsps / 1_000_f64,
-            duration_as_ms(&duration),
-            blockhash,
+            "Done. {us_per_signature:.2} us per signature, {duration_us} us total time, {blockhash:?}",
         );
-        datapoint_info!(
-            "bench-tps-generate_txs",
-            ("duration", duration_as_us(&duration), i64)
-        );
+
+        datapoint_info!("bench-tps-generate_txs", ("duration", duration_us, i64));
 
         transactions
     }

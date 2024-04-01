@@ -100,23 +100,25 @@ where
             .into_par_iter()
             .map(|tx| bincode::serialize(&tx).expect("serialize Transaction in send_batch"))
             .collect::<Vec<_>>();
-        //self.invoke(
-        //    self.tpu_client
-        //        .try_send_wire_transaction_batch(wire_transactions),
-        //)
-        let connection_cache = self.tpu_client.connection_cache.clone();
-        let tpu_addresses = self
-            .tpu_client
-            .leader_tpu_service
-            .leader_tpu_sockets(self.tpu_client.fanout_slots);
+        //for c in wire_transactions.chunks(64) {
+        self.invoke(
+            self.tpu_client
+                .try_send_wire_transaction_batch(wire_transactions), //c.to_vec()), //wire_transactions),
+        )
+        //}
+        /*let connection_cache = self.tpu_client.connection_cache.clone();
         for c in wire_transactions.chunks(64) {
+            let tpu_addresses = self
+                .tpu_client
+                .leader_tpu_service
+                .leader_tpu_sockets(self.tpu_client.fanout_slots);
             for tpu_address in &tpu_addresses {
                 //let wire_transactions = wire_transactions.iter().map(|t| t.to_vec()).collect();
                 let conn = connection_cache.get_connection(tpu_address);
                 conn.send_data_batch_async(c.to_vec());
             }
-        }
-        Ok(())
+        }*/
+        //Ok(())
     }
 
     /// Send a wire transaction to the current and upcoming leader TPUs according to fanout size

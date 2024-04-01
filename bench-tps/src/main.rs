@@ -152,7 +152,7 @@ fn create_client(
                     TpuClient::new_with_connection_cache(
                         rpc_client,
                         websocket_url,
-                        TpuClientConfig::default(),
+                        TpuClientConfig { fanout_slots: 1 },
                         cache,
                     )
                     .unwrap_or_else(|err| {
