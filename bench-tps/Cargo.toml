@@ -45,6 +45,7 @@ solana-transaction-status = { workspace = true }
 solana-version = { workspace = true }
 spl-instruction-padding = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 serial_test = { workspace = true }
