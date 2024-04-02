@@ -78,7 +78,7 @@ fn create_connection_cache(
     tpu_connection_pool_size: usize,
     use_quic: bool,
     bind_address: IpAddr,
-    client_node_id: Option<&Keypair>,
+    client_node_ids: Option<&Vec<Keypair>>,
     commitment_config: CommitmentConfig,
 ) -> ConnectionCache {
     if !use_quic {
@@ -226,7 +226,7 @@ fn main() {
         use_durable_nonce,
         instruction_padding_config,
         bind_address,
-        client_node_id,
+        client_node_ids,
         commitment_config,
         ..
     } = &cli_config;
