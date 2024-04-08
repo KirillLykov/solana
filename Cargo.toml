@@ -27,7 +27,6 @@ members = [
     "connection-cache",
     "core",
     "cost-model",
-    "dos",
     "download-utils",
     "entry",
     "faucet",

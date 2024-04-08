@@ -5520,11 +5520,15 @@ dependencies = [
 name = "solana-bench-tps"
 version = "1.17.30"
 dependencies = [
+ "bincode",
+ "chrono",
  "clap 2.33.3",
  "crossbeam-channel",
+ "csv",
  "log",
  "rand 0.8.5",
  "rayon",
+ "serde",
  "serde_json",
  "serde_yaml 0.9.25",
  "serial_test",
@@ -5541,6 +5545,7 @@ dependencies = [
  "solana-measure",
  "solana-metrics",
  "solana-net-utils",
+ "solana-quic-client",
  "solana-rpc",
  "solana-rpc-client",
  "solana-rpc-client-api",
@@ -5549,12 +5554,13 @@ dependencies = [
  "solana-sdk",
  "solana-streamer",
  "solana-test-validator",
- "solana-thin-client",
  "solana-tpu-client",
+ "solana-transaction-status",
  "solana-version",
  "spl-instruction-padding",
  "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -6011,36 +6017,6 @@ dependencies = [
  "solana-vote-program",
  "static_assertions",
  "test-case",
-]
-
-[[package]]
-name = "solana-dos"
-version = "1.17.30"
-dependencies = [
- "bincode",
- "clap 3.2.23",
- "crossbeam-channel",
- "itertools",
- "log",
- "rand 0.8.5",
- "serde",
- "solana-bench-tps",
- "solana-client",
- "solana-core",
- "solana-faucet",
- "solana-gossip",
- "solana-local-cluster",
- "solana-logger",
- "solana-measure",
- "solana-net-utils",
- "solana-perf",
- "solana-rpc",
- "solana-rpc-client",
- "solana-sdk",
- "solana-streamer",
- "solana-thin-client",
- "solana-tpu-client",
- "solana-version",
 ]
 
 [[package]]
