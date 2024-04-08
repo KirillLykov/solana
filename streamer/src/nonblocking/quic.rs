@@ -1088,11 +1088,12 @@ impl ConnectionTable {
         max_connections_per_peer: usize,
     ) -> Option<(Arc<AtomicU64>, Arc<AtomicBool>)> {
         let connection_entry = self.table.entry(key).or_default();
-        let has_connection_capacity = connection_entry
-            .len()
-            .checked_add(1)
-            .map(|c| c <= max_connections_per_peer)
-            .unwrap_or(false);
+        let has_connection_capacity = true;
+            //connection_entry
+            //.len()
+            //.checked_add(1)
+            //.map(|c| c <= max_connections_per_peer)
+            //.unwrap_or(false);
         if has_connection_capacity {
             let exit = Arc::new(AtomicBool::new(false));
             let last_update = Arc::new(AtomicU64::new(last_update));
