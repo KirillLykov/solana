@@ -22,6 +22,7 @@ use {
 const DEFAULT_CONNECTION_POOL_SIZE: usize = 4;
 const DEFAULT_CONNECTION_CACHE_USE_QUIC: bool = true;
 
+#[derive(Clone)]
 /// A thin wrapper over connection-cache/ConnectionCache to ease
 /// construction of the ConnectionCache for code dealing both with udp and quic.
 /// For the scenario only using udp or quic, use connection-cache/ConnectionCache directly.

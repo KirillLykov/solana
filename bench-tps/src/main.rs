@@ -11,7 +11,7 @@ use {
         keypairs::get_keypairs,
         send_batch::{generate_durable_nonce_accounts, generate_keypairs},
     },
-    solana_client::connection_cache::ConnectionCache,
+    solana_client::{connection_cache::ConnectionCache, thin_client::ThinClient},
     solana_genesis::Base64Account,
     solana_rpc_client::rpc_client::RpcClient,
     solana_sdk::{
@@ -28,7 +28,7 @@ use {
         fs::File,
         io::prelude::*,
         net::IpAddr,
-        net::ToSocketAddrs,
+        net::{SocketAddr, ToSocketAddrs},
         path::Path,
         process::exit,
         sync::{Arc, RwLock},
@@ -142,6 +142,24 @@ fn create_client(
             json_rpc_url.to_string(),
             commitment_config,
         )),
+        ExternalClientType::ThinClient => {
+            let Some(pinned_tpu_address) = pinned_tpu_address else {
+                panic!("ThinClient requires pinned address");
+            };
+            let rpc: SocketAddr = (pinned_tpu_address.split(':').collect::<Vec<_>>()[0].to_owned()
+                + ":8899")
+                .parse()
+                .unwrap();
+            let tpu: SocketAddr = pinned_tpu_address
+                .to_socket_addrs()
+                .ok()
+                .unwrap()
+                .next()
+                .unwrap();
+            info!("RPC: {:?}, TPU: {:?}", rpc, tpu);
+            let connection_cache = Arc::new(connection_caches[0].clone());
+            Arc::new(ThinClient::new(rpc, tpu, connection_cache))
+        }
         ExternalClientType::TpuClient => {
             let rpc_client = Arc::new(RpcClient::new_with_commitment(
                 json_rpc_url.to_string(),

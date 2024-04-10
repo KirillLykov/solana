@@ -28,6 +28,7 @@ pub enum ExternalClientType {
     // via TpuClient default configuration
     TpuClient,
 
+    ThinClient,
     HighTpsClient,
 }
 
@@ -176,7 +177,7 @@ pub fn build_args<'a>(version: &'_ str) -> App<'a, '_> {
                 .long("pinned-tpu-address")
                 .value_name("HOST:PORT")
                 .takes_value(true)
-                .requires("high_tps_client")
+                //.requires("high_tps_client")
                 .help("Specify custom tpu_addr to send all transaction to particular endpoint."),
         )
         .arg(
@@ -345,6 +346,15 @@ pub fn build_args<'a>(version: &'_ str) -> App<'a, '_> {
                 .help("Submit transactions with a HighTpsClient")
         )
         .arg(
+            Arg::with_name("thin_client")
+                .long("use-thin-client")
+                .conflicts_with("rpc_client")
+                .conflicts_with("tpu_client")
+                .conflicts_with("high_tps_client")
+                .takes_value(false)
+                .help("Submit transactions with a ThinClient")
+        )
+        .arg(
             Arg::with_name("tpu_disable_quic")
                 .long("tpu-disable-quic")
                 .takes_value(false)
@@ -492,6 +502,10 @@ pub fn parse_args(matches: &ArgMatches) -> Result<Config, &'static str> {
 
     if matches.is_present("high_tps_client") {
         args.external_client_type = ExternalClientType::HighTpsClient;
+    }
+
+    if matches.is_present("thin_client") {
+        args.external_client_type = ExternalClientType::ThinClient;
     }
 
     if matches.is_present("tpu_disable_quic") {
