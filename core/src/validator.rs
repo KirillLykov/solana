@@ -1,6 +1,8 @@
 //! The `validator` module hosts all the validator microservices.
 
+use crate::banking_stage::client_wrapper::ClientWrapper;
 pub use solana_perf::report_target_features;
+
 use {
     crate::{
         accounts_hash_verifier::AccountsHashVerifier,
@@ -1447,6 +1449,31 @@ impl Validator {
             return Err(ValidatorError::WenRestartFinished.into());
         }
 
+        let forwarding_client = match use_quic {
+            true => {
+                let connection_cache = ConnectionCache::new_with_client_options(
+                    "connection_cache_tpu_quic",
+                    tpu_connection_pool_size,
+                    None,
+                    Some((
+                        &identity_keypair,
+                        node.info
+                            .tpu(Protocol::UDP)
+                            .map_err(|err| {
+                                ValidatorError::Other(format!("Invalid TPU address: {err:?}"))
+                            })?
+                            .ip(),
+                    )),
+                    Some((&staked_nodes, &identity_keypair.pubkey())),
+                );
+                ClientWrapper::ConnectionCache(Arc::new(connection_cache))
+            }
+            false => ClientWrapper::ConnectionCache(Arc::new(ConnectionCache::with_udp(
+                "connection_cache_tpu_udp",
+                tpu_connection_pool_size,
+            ))),
+        };
+
         let (tpu, mut key_notifies) = Tpu::new(
             &cluster_info,
             &poh_recorder,
@@ -1476,7 +1503,8 @@ impl Validator {
             bank_notification_sender.map(|sender| sender.sender),
             config.tpu_coalesce,
             duplicate_confirmed_slot_sender,
-            &connection_cache,
+            //&connection_cache,
+            forwarding_client,
             turbine_quic_endpoint_sender,
             &identity_keypair,
             config.runtime_config.log_messages_bytes_limit,

@@ -17,6 +17,7 @@ use {
     },
     crate::{
         banking_stage::{
+            client_wrapper::ClientWrapper,
             consume_worker::ConsumeWorker,
             packet_deserializer::PacketDeserializer,
             transaction_scheduler::{
@@ -29,9 +30,7 @@ use {
         validator::BlockProductionMethod,
     },
     crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
-    forwarder::ClientWrapper,
     histogram::Histogram,
-    solana_client::connection_cache::ConnectionCache,
     solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
     solana_ledger::blockstore_processor::TransactionStatusSender,
     solana_measure::measure_us,
@@ -55,6 +54,7 @@ use {
 };
 
 // Below modules are pub to allow use by banking_stage bench
+pub mod client_wrapper;
 pub mod committer;
 pub mod consumer;
 pub mod forwarder;
@@ -357,7 +357,7 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         replay_vote_sender: ReplayVoteSender,
         log_messages_bytes_limit: Option<usize>,
-        connection_cache: Arc<ConnectionCache>,
+        forwarding_client: ClientWrapper,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
         enable_forwarding: bool,
@@ -373,7 +373,7 @@ impl BankingStage {
             transaction_status_sender,
             replay_vote_sender,
             log_messages_bytes_limit,
-            connection_cache,
+            forwarding_client,
             bank_forks,
             prioritization_fee_cache,
             enable_forwarding,
@@ -392,7 +392,7 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         replay_vote_sender: ReplayVoteSender,
         log_messages_bytes_limit: Option<usize>,
-        connection_cache: Arc<ConnectionCache>,
+        forwarding_client: ClientWrapper,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
         enable_forwarding: bool,
@@ -409,7 +409,7 @@ impl BankingStage {
                     transaction_status_sender,
                     replay_vote_sender,
                     log_messages_bytes_limit,
-                    connection_cache,
+                    forwarding_client,
                     bank_forks,
                     prioritization_fee_cache,
                 )
@@ -424,7 +424,7 @@ impl BankingStage {
                 transaction_status_sender,
                 replay_vote_sender,
                 log_messages_bytes_limit,
-                connection_cache,
+                forwarding_client,
                 bank_forks,
                 prioritization_fee_cache,
                 enable_forwarding,
@@ -443,7 +443,7 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         replay_vote_sender: ReplayVoteSender,
         log_messages_bytes_limit: Option<usize>,
-        connection_cache: Arc<ConnectionCache>,
+        forwarding_client: ClientWrapper,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
     ) -> Self {
@@ -499,7 +499,7 @@ impl BankingStage {
                     poh_recorder.clone(),
                     bank_forks.clone(),
                     cluster_info.clone(),
-                    ClientWrapper::ConnectionCache(connection_cache.clone()),
+                    forwarding_client.clone(),
                     data_budget.clone(),
                 );
 
@@ -529,7 +529,7 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         replay_vote_sender: ReplayVoteSender,
         log_messages_bytes_limit: Option<usize>,
-        connection_cache: Arc<ConnectionCache>,
+        forwarding_client: ClientWrapper,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
         enable_forwarding: bool,
@@ -572,7 +572,7 @@ impl BankingStage {
                     poh_recorder.clone(),
                     bank_forks.clone(),
                     cluster_info.clone(),
-                    ClientWrapper::ConnectionCache(connection_cache.clone()),
+                    forwarding_client.clone(),
                     data_budget.clone(),
                 ),
                 UnprocessedTransactionStorage::new_vote_storage(
@@ -621,7 +621,7 @@ impl BankingStage {
                 poh_recorder.clone(),
                 bank_forks.clone(),
                 cluster_info.clone(),
-                ClientWrapper::ConnectionCache(connection_cache.clone()),
+                forwarding_client.clone(),
                 data_budget.clone(),
             )
         });
@@ -824,6 +824,7 @@ mod tests {
         crate::banking_trace::{BankingPacketBatch, BankingTracer},
         crossbeam_channel::{unbounded, Receiver},
         itertools::Itertools,
+        solana_client::connection_cache::ConnectionCache,
         solana_entry::entry::{self, Entry, EntrySlice},
         solana_gossip::cluster_info::Node,
         solana_ledger::{
@@ -905,7 +906,7 @@ mod tests {
                 None,
                 replay_vote_sender,
                 None,
-                Arc::new(ConnectionCache::new("connection_cache_test")),
+                Arc::new(ConnectionCache::new("connection_cache_test")).into(),
                 bank_forks,
                 &Arc::new(PrioritizationFeeCache::new(0u64)),
                 false,
@@ -961,7 +962,7 @@ mod tests {
                 None,
                 replay_vote_sender,
                 None,
-                Arc::new(ConnectionCache::new("connection_cache_test")),
+                Arc::new(ConnectionCache::new("connection_cache_test")).into(),
                 bank_forks,
                 &Arc::new(PrioritizationFeeCache::new(0u64)),
                 false,
@@ -1041,7 +1042,7 @@ mod tests {
                 None,
                 replay_vote_sender,
                 None,
-                Arc::new(ConnectionCache::new("connection_cache_test")),
+                Arc::new(ConnectionCache::new("connection_cache_test")).into(),
                 bank_forks.clone(), // keep a local-copy of bank-forks so worker threads do not lose weak access to bank-forks
                 &Arc::new(PrioritizationFeeCache::new(0u64)),
                 false,
@@ -1212,7 +1213,7 @@ mod tests {
                     None,
                     replay_vote_sender,
                     None,
-                    Arc::new(ConnectionCache::new("connection_cache_test")),
+                    Arc::new(ConnectionCache::new("connection_cache_test")).into(),
                     bank_forks,
                     &Arc::new(PrioritizationFeeCache::new(0u64)),
                 );
@@ -1403,7 +1404,7 @@ mod tests {
                 None,
                 replay_vote_sender,
                 None,
-                Arc::new(ConnectionCache::new("connection_cache_test")),
+                Arc::new(ConnectionCache::new("connection_cache_test")).into(),
                 bank_forks,
                 &Arc::new(PrioritizationFeeCache::new(0u64)),
                 false,

@@ -471,7 +471,7 @@ fn main() {
         None,
         replay_vote_sender,
         None,
-        Arc::new(connection_cache),
+        Arc::new(connection_cache).into(),
         bank_forks.clone(),
         &Arc::new(PrioritizationFeeCache::new(0u64)),
         false,

@@ -811,7 +811,7 @@ impl BankingSimulator {
             None,
             replay_vote_sender,
             None,
-            connection_cache,
+            connection_cache.into(),
             bank_forks.clone(),
             prioritization_fee_cache,
             false,

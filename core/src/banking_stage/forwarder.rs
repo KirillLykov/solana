@@ -7,12 +7,12 @@ use {
     },
     crate::{
         banking_stage::{
-            immutable_deserialized_packet::ImmutableDeserializedPacket, LikeClusterInfo,
+            immutable_deserialized_packet::ImmutableDeserializedPacket, ClientWrapper,
+            LikeClusterInfo,
         },
         next_leader::{next_leader, next_leader_tpu_vote},
         tracer_packet_stats::TracerPacketStats,
     },
-    solana_client::connection_cache::ConnectionCache,
     solana_connection_cache::client_connection::ClientConnection as TpuConnection,
     solana_feature_set::FeatureSet,
     solana_measure::measure_us,
@@ -36,12 +36,6 @@ pub struct Forwarder<T: LikeClusterInfo> {
     connection_cache: ClientWrapper,
     data_budget: Arc<DataBudget>,
     forward_packet_batches_by_accounts: ForwardPacketBatchesByAccounts,
-}
-
-// TODO(klykov): try to wrap whatever clients are used
-#[derive(Clone)]
-pub enum ClientWrapper {
-    ConnectionCache(Arc<ConnectionCache>),
 }
 
 impl<T: LikeClusterInfo> Forwarder<T> {
@@ -322,7 +316,7 @@ mod tests {
             unprocessed_packet_batches::{DeserializedPacket, UnprocessedPacketBatches},
             unprocessed_transaction_storage::ThreadType,
         },
-        solana_client::rpc_client::SerializableTransaction,
+        solana_client::{connection_cache::ConnectionCache, rpc_client::SerializableTransaction},
         solana_gossip::cluster_info::{ClusterInfo, Node},
         solana_ledger::{blockstore::Blockstore, genesis_utils::GenesisConfigInfo},
         solana_perf::packet::PacketFlags,
