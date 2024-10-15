@@ -33,9 +33,15 @@ pub struct Forwarder<T: LikeClusterInfo> {
     bank_forks: Arc<RwLock<BankForks>>,
     socket: UdpSocket,
     cluster_info: T,
-    connection_cache: Arc<ConnectionCache>,
+    connection_cache: ClientWrapper,
     data_budget: Arc<DataBudget>,
     forward_packet_batches_by_accounts: ForwardPacketBatchesByAccounts,
+}
+
+// TODO(klykov): try to wrap whatever clients are used
+#[derive(Clone)]
+pub enum ClientWrapper {
+    ConnectionCache(Arc<ConnectionCache>),
 }
 
 impl<T: LikeClusterInfo> Forwarder<T> {
@@ -43,7 +49,7 @@ impl<T: LikeClusterInfo> Forwarder<T> {
         poh_recorder: Arc<RwLock<PohRecorder>>,
         bank_forks: Arc<RwLock<BankForks>>,
         cluster_info: T,
-        connection_cache: Arc<ConnectionCache>,
+        connection_cache: ClientWrapper,
         data_budget: Arc<DataBudget>,
     ) -> Self {
         Self {
@@ -257,7 +263,10 @@ impl<T: LikeClusterInfo> Forwarder<T> {
             ForwardOption::NotForward => None,
             ForwardOption::ForwardTransaction => {
                 next_leader(&self.cluster_info, &self.poh_recorder, |node| {
-                    node.tpu_forwards(self.connection_cache.protocol())
+                    node.tpu_forwards(
+                        /*self.connection_cache.protocol()*/
+                        solana_client::connection_cache::Protocol::QUIC,
+                    )
                 })
             }
             ForwardOption::ForwardTpuVote => {
@@ -293,10 +302,12 @@ impl<T: LikeClusterInfo> Forwarder<T> {
                 let pkts: Vec<_> = packet_vec.into_iter().zip(repeat(*addr)).collect();
                 batch_send(&self.socket, &pkts).map_err(|err| err.into())
             }
-            ForwardOption::ForwardTransaction => {
-                let conn = self.connection_cache.get_connection(addr);
-                conn.send_data_batch_async(packet_vec)
-            }
+            ForwardOption::ForwardTransaction => match &self.connection_cache {
+                ClientWrapper::ConnectionCache(connection_cache) => {
+                    let conn = connection_cache.get_connection(addr);
+                    conn.send_data_batch_async(packet_vec)
+                }
+            },
             ForwardOption::NotForward => panic!("should not forward"),
         }
     }
@@ -461,12 +472,14 @@ mod tests {
             ("budget-available", DataBudget::default(), 1),
         ];
         let runtime = rt("solQuicTestRt".to_string());
+        let client =
+            ClientWrapper::ConnectionCache(Arc::new(ConnectionCache::new("connection_cache_test")));
         for (_name, data_budget, expected_num_forwarded) in test_cases {
             let mut forwarder = Forwarder::new(
                 poh_recorder.clone(),
                 bank_forks.clone(),
                 cluster_info.clone(),
-                Arc::new(ConnectionCache::new("connection_cache_test")),
+                client.clone(),
                 Arc::new(data_budget),
             );
             let unprocessed_packet_batches: UnprocessedPacketBatches =
@@ -559,19 +572,19 @@ mod tests {
             ),
             ThreadType::Transactions,
         );
-        let connection_cache = ConnectionCache::new("connection_cache_test");
-
         let test_cases = vec![
             ("fwd-normal", true, 2, 1),
             ("fwd-no-op", true, 2, 0),
             ("fwd-no-hold", false, 0, 0),
         ];
 
+        let client =
+            ClientWrapper::ConnectionCache(Arc::new(ConnectionCache::new("connection_cache_test")));
         let mut forwarder = Forwarder::new(
             poh_recorder,
             bank_forks,
             cluster_info,
-            Arc::new(connection_cache),
+            client,
             Arc::new(DataBudget::default()),
         );
         let runtime = rt("solQuicTestRt".to_string());

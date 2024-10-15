@@ -29,6 +29,7 @@ use {
         validator::BlockProductionMethod,
     },
     crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
+    forwarder::ClientWrapper,
     histogram::Histogram,
     solana_client::connection_cache::ConnectionCache,
     solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
@@ -498,7 +499,7 @@ impl BankingStage {
                     poh_recorder.clone(),
                     bank_forks.clone(),
                     cluster_info.clone(),
-                    connection_cache.clone(),
+                    ClientWrapper::ConnectionCache(connection_cache.clone()),
                     data_budget.clone(),
                 );
 
@@ -571,7 +572,7 @@ impl BankingStage {
                     poh_recorder.clone(),
                     bank_forks.clone(),
                     cluster_info.clone(),
-                    connection_cache.clone(),
+                    ClientWrapper::ConnectionCache(connection_cache.clone()),
                     data_budget.clone(),
                 ),
                 UnprocessedTransactionStorage::new_vote_storage(
@@ -620,7 +621,7 @@ impl BankingStage {
                 poh_recorder.clone(),
                 bank_forks.clone(),
                 cluster_info.clone(),
-                connection_cache.clone(),
+                ClientWrapper::ConnectionCache(connection_cache.clone()),
                 data_budget.clone(),
             )
         });
