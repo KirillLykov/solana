@@ -6462,6 +6462,7 @@ dependencies = [
  "solana-svm-transaction",
  "solana-timings",
  "solana-tpu-client",
+ "solana-tpu-client-next",
  "solana-transaction-status",
  "solana-turbine",
  "solana-unified-scheduler-pool",

@@ -21,6 +21,7 @@ use {
     solana_runtime::bank_forks::BankForks,
     solana_sdk::{pubkey::Pubkey, transaction::SanitizedTransaction, transport::TransportError},
     solana_streamer::sendmmsg::batch_send,
+    solana_tpu_client_next::transaction_batch::TransactionBatch,
     std::{
         iter::repeat,
         net::{SocketAddr, UdpSocket},
@@ -300,6 +301,27 @@ impl<T: LikeClusterInfo> Forwarder<T> {
                 ClientWrapper::ConnectionCache(connection_cache) => {
                     let conn = connection_cache.get_connection(addr);
                     conn.send_data_batch_async(packet_vec)
+                }
+                ClientWrapper::TpuClientNextSender(sender) => {
+                    // TODO(klykov): here the logic is  different: instead of
+                    // sending whatever we have right now as done in
+                    // ConnectionCache (see `_send_buffer` in quic_client.rs) we
+                    // put the the channel. This way we respect the flow control
+                    // on the server side. Hence, there might be several errors:
+                    // * current leader doesn't accept the transaction batch. It
+                    //   might happen also with ConnectionCache, it looks like
+                    //   we just ignore this error and these txs got lost.
+                    // * current leader doesn't want that many transactions, so
+                    //   the channel is full and try_send fails.
+                    // * If we wait in a loop a place for the new batch, it
+                    //   might happen that the batch will be expired we we
+                    //   finally send it. The question is what do we want to do
+                    //   when fail forwarding?
+                    // How long we should try sending?
+                    let result = sender.try_send(TransactionBatch::new(packet_vec));
+                    debug!("RESULT = {result:?}");
+                    // Should happen on different level. Because we might fail with one address but while waiting the address changes.
+                    Ok(())
                 }
             },
             ForwardOption::NotForward => panic!("should not forward"),
