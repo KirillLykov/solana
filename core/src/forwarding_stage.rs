@@ -21,12 +21,14 @@ use {
     },
     solana_sdk::{fee::FeeBudgetLimits, packet, transaction::MessageHash},
     solana_streamer::sendmmsg::batch_send,
+    solana_tpu_client_next::transaction_batch::TransactionBatch,
     std::{
         net::{SocketAddr, UdpSocket},
         sync::{Arc, RwLock},
         thread::{Builder, JoinHandle},
         time::{Duration, Instant},
     },
+    tokio::sync::mpsc,
 };
 
 const FORWARD_BATCH_SIZE: usize = 128;
@@ -50,30 +52,45 @@ impl<T: LikeClusterInfo> ForwardAddressGetter for (T, Arc<RwLock<PohRecorder>>) 
     }
 }
 
+#[derive(Clone)]
+pub enum TransactionForwardClient {
+    ConnectionCache(Arc<ConnectionCache>),
+    TpuClientNextSender(mpsc::Sender<TransactionBatch>),
+}
+
+impl From<Arc<ConnectionCache>> for TransactionForwardClient {
+    fn from(cache: Arc<ConnectionCache>) -> Self {
+        TransactionForwardClient::ConnectionCache(cache)
+    }
+}
+
 pub struct ForwardingStage<F: ForwardAddressGetter> {
     receiver: Receiver<(BankingPacketBatch, bool)>,
     packet_container: PacketContainer,
 
     root_bank_cache: RootBankCache,
     forward_address_getter: F,
-    connection_cache: Arc<ConnectionCache>,
+    transaction_client: TransactionForwardClient,
     data_budget: DataBudget,
     udp_socket: UdpSocket,
 
     metrics: ForwardingStageMetrics,
 }
 
+// TODO(klykov): how do it work without cluster_info?
 impl<F: ForwardAddressGetter> ForwardingStage<F> {
     pub fn spawn(
         receiver: Receiver<(BankingPacketBatch, bool)>,
-        connection_cache: Arc<ConnectionCache>,
+        transaction_client: TransactionForwardClient,
         root_bank_cache: RootBankCache,
         forward_address_getter: F,
     ) -> JoinHandle<()> {
         let forwarding_stage = Self::new(
             receiver,
-            connection_cache,
+            transaction_client,
             root_bank_cache,
+            DataBudget::default(),
+            //data_budget, pass from construtor later
             forward_address_getter,
         );
         Builder::new()
@@ -84,8 +101,9 @@ impl<F: ForwardAddressGetter> ForwardingStage<F> {
 
     fn new(
         receiver: Receiver<(BankingPacketBatch, bool)>,
-        connection_cache: Arc<ConnectionCache>,
+        transaction_client: TransactionForwardClient,
         root_bank_cache: RootBankCache,
+        data_budget: DataBudget,
         forward_address_getter: F,
     ) -> Self {
         Self {
@@ -93,8 +111,8 @@ impl<F: ForwardAddressGetter> ForwardingStage<F> {
             packet_container: PacketContainer::with_capacity(4 * 4096),
             root_bank_cache,
             forward_address_getter,
-            connection_cache,
-            data_budget: DataBudget::default(),
+            transaction_client,
+            data_budget,
             udp_socket: bind_to_unspecified().unwrap(),
             metrics: ForwardingStageMetrics::default(),
         }

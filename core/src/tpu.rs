@@ -8,6 +8,7 @@ pub use solana_sdk::net::DEFAULT_TPU_COALESCE;
     note = "Use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER instead"
 )]
 pub use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER as MAX_QUIC_CONNECTIONS_PER_PEER;
+
 use {
     crate::{
         banking_stage::BankingStage,
@@ -17,9 +18,11 @@ use {
             VerifiedVoteSender, VoteTracker,
         },
         fetch_stage::FetchStage,
+        forwarding_stage::TransactionForwardClient,
         sigverify::TransactionSigVerifier,
         sigverify_stage::SigVerifyStage,
         staked_nodes_updater_service::StakedNodesUpdaterService,
+        tpu_client_next::spawn_tpu_client_next,
         tpu_entry_notifier::TpuEntryNotifier,
         validator::{BlockProductionMethod, GeneratorConfig, TransactionStructure},
     },

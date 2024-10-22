@@ -52,7 +52,7 @@ struct ForwardingStageLeaderUpdater<T: LikeClusterInfo> {
 
 #[async_trait]
 impl<T: LikeClusterInfo> LeaderUpdater for ForwardingStageLeaderUpdater<T> {
-    fn next_leaders(&self, _lookahead_slots: u64) -> Vec<SocketAddr> {
+    fn next_leaders(&mut self, _lookahead_slots: usize) -> Vec<SocketAddr> {
         let Some((_leader, address)) =
             next_leader(&self.cluster_info, &self.poh_recorder, |node| {
                 ContactInfo::tpu_forwards(node, Protocol::QUIC)
