@@ -107,7 +107,7 @@ fn setup(num_packets: usize, contentious_transaction: bool) -> BenchSetup {
         poh_recorder,
         bank_forks,
         cluster_info,
-        Arc::new(connection_cache),
+        Arc::new(connection_cache).into(),
         Arc::new(data_budget),
     );
 

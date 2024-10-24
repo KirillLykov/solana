@@ -16,7 +16,7 @@ use {
         consume_worker::ConsumeWorkerMetrics,
         consumer::Consumer,
         decision_maker::{BufferedPacketsDecision, DecisionMaker},
-        forwarder::Forwarder,
+        forwarder::{Forwarder, ForwarderClient},
         immutable_deserialized_packet::ImmutableDeserializedPacket,
         packet_deserializer::PacketDeserializer,
         ForwardOption, LikeClusterInfo, TOTAL_BUFFERED_PACKETS,
@@ -44,7 +44,7 @@ use {
 };
 
 /// Controls packet and transaction flow into scheduler, and scheduling execution.
-pub(crate) struct SchedulerController<T: LikeClusterInfo> {
+pub(crate) struct SchedulerController<Client: ForwarderClient> {
     /// Decision maker for determining what should be done with transactions.
     decision_maker: DecisionMaker,
     /// Packet/Transaction ingress.
@@ -68,17 +68,17 @@ pub(crate) struct SchedulerController<T: LikeClusterInfo> {
     /// Metric report handles for the worker threads.
     worker_metrics: Vec<Arc<ConsumeWorkerMetrics>>,
     /// State for forwarding packets to the leader, if enabled.
-    forwarder: Option<Forwarder<T>>,
+    forwarder: Option<Forwarder<Client>>,
 }
 
-impl<T: LikeClusterInfo> SchedulerController<T> {
+impl<Client: ForwarderClient> SchedulerController<Client> {
     pub fn new(
         decision_maker: DecisionMaker,
         packet_deserializer: PacketDeserializer,
         bank_forks: Arc<RwLock<BankForks>>,
         scheduler: PrioGraphScheduler,
         worker_metrics: Vec<Arc<ConsumeWorkerMetrics>>,
-        forwarder: Option<Forwarder<T>>,
+        forwarder: Option<Forwarder<Client>>,
     ) -> Self {
         Self {
             decision_maker,
