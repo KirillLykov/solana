@@ -5,10 +5,11 @@ use {
     solana_client::connection_cache::{ConnectionCache, Protocol},
     solana_connection_cache::client_connection::ClientConnection as TpuConnection,
     solana_measure::measure::Measure,
-    solana_sdk::signature::Keypair,
+    solana_sdk::{clock::NUM_CONSECUTIVE_LEADER_SLOTS, signature::Keypair},
     solana_tpu_client_next::{
-        connection_workers_scheduler::ConnectionWorkersSchedulerConfig,
-        leader_updater::LeaderUpdater, transaction_batch::TransactionBatch,
+        connection_workers_scheduler::{ConnectionWorkersSchedulerConfig, LeadersFanout},
+        leader_updater::LeaderUpdater,
+        transaction_batch::TransactionBatch,
         ConnectionWorkersScheduler,
     },
     std::{
@@ -180,7 +181,13 @@ where
         let discovered_peers = self
             .leader_info_provider
             .get_leader_info()
-            .map(|leader_info| leader_info.get_leader_tpus(lookahead_slots / 4, Protocol::QUIC))
+            .map(|leader_info| {
+                // get_leader_tpus looks ahead on max_count * NUM_CONSECUTIVE_LEADER_SLOTS
+                leader_info.get_leader_tpus(
+                    lookahead_slots / NUM_CONSECUTIVE_LEADER_SLOTS,
+                    Protocol::QUIC,
+                )
+            })
             .filter(|addresses| !addresses.is_empty())
             .unwrap_or_else(|| vec![&self.my_tpu_address]);
         let mut all_peers = self.tpu_peers.clone().unwrap_or_default();
@@ -258,6 +265,7 @@ where
                 worker_channel_size: 2,
                 max_reconnect_attempts: 4,
                 lookahead_slots: leader_forward_count,
+                leaders_fanout: LeadersFanout::All,
             };
             let _scheduler = tokio::spawn(ConnectionWorkersScheduler::run(
                 config,
