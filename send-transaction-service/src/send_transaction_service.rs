@@ -5,7 +5,7 @@ use {
         },
         transaction_client::TransactionClient,
     },
-    crossbeam_channel::{Receiver, RecvTimeoutError},
+    crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError},
     itertools::Itertools,
     log::*,
     solana_runtime::{bank::Bank, bank_forks::BankForks},
@@ -161,12 +161,14 @@ impl SendTransactionService {
     ) -> Self {
         let stats_report = Arc::new(SendTransactionServiceStatsReport::default());
 
-        let retry_transactions = Arc::new(Mutex::new(HashMap::new()));
+        //let retry_transactions = Arc::new(Mutex::new(HashMap::new()));
+        let (tx_sender, tx_receiver) = crossbeam_channel::bounded(10_000);
 
         let receive_txn_thread = Self::receive_txn_thread(
             receiver,
             client.clone(),
-            retry_transactions.clone(),
+            //retry_transactions.clone(),
+            tx_sender,
             stats_report.clone(),
             config.batch_send_rate_ms,
             config.batch_size,
@@ -177,7 +179,8 @@ impl SendTransactionService {
         let retry_thread = Self::retry_thread(
             bank_forks.clone(),
             client,
-            retry_transactions,
+            //retry_transactions,
+            tx_receiver,
             config.retry_rate_ms,
             config.service_max_retries,
             config.default_max_retries,
@@ -196,7 +199,8 @@ impl SendTransactionService {
     fn receive_txn_thread<Client: TransactionClient + std::marker::Send + 'static>(
         receiver: Receiver<TransactionInfo>,
         client: Client,
-        retry_transactions: Arc<Mutex<HashMap<Signature, TransactionInfo>>>,
+        //retry_transactions: Arc<Mutex<HashMap<Signature, TransactionInfo>>>,
+        sender: Sender<Vec<TransactionInfo>>,
         stats_report: Arc<SendTransactionServiceStatsReport>,
         batch_send_rate_ms: u64,
         batch_size: usize,
@@ -228,14 +232,16 @@ impl SendTransactionService {
                         let entry = transactions.entry(transaction_info.signature);
                         let mut new_transaction = false;
                         if let Entry::Vacant(_) = entry {
-                            if !retry_transactions
-                                .lock()
-                                .unwrap()
-                                .contains_key(&transaction_info.signature)
-                            {
-                                entry.or_insert(transaction_info);
-                                new_transaction = true;
-                            }
+                            // Before we add to the map only if this tx is not in the shared `retry_transactions`.
+                            // I don't think it is necessary.
+                            //if !retry_transactions
+                            //    .lock()
+                            //    .unwrap()
+                            //    .contains_key(&transaction_info.signature)
+                            //{
+                            entry.or_insert(transaction_info);
+                            new_transaction = true;
+                            //}
                         }
                         if !new_transaction {
                             stats
@@ -260,30 +266,51 @@ impl SendTransactionService {
                     let last_sent_time = Instant::now();
                     {
                         // take a lock of retry_transactions and move the batch to the retry set.
-                        let mut retry_transactions = retry_transactions.lock().unwrap();
+                        //let mut retry_transactions = retry_transactions.lock().unwrap();
                         let transactions_to_retry = transactions.len();
                         let mut transactions_added_to_retry: usize = 0;
-                        for (signature, mut transaction_info) in transactions.drain() {
-                            let retry_len = retry_transactions.len();
-                            let entry = retry_transactions.entry(signature);
-                            if let Entry::Vacant(_) = entry {
-                                if retry_len >= retry_pool_max_size {
+
+                        //for (signature, mut transaction_info) in transactions.drain() {
+                        while !transactions.is_empty() {
+                            //let retry_len = retry_transactions.len();
+                            //let entry = retry_transactions.entry(signature);
+                            //if let Entry::Vacant(_) = entry {
+                            //if retry_len >= retry_pool_max_size {
+                            //    break;
+                            //} else {
+                            if sender.len() + 256 >= sender.capacity().unwrap() {
+                                break;
+                            }
+                            let mut batch: Vec<TransactionInfo> =
+                                transactions.drain().take(256).map(|(k, v)| v).collect();
+                            for transaction_info in &mut batch {
+                                transaction_info.last_sent_time = Some(last_sent_time);
+                            }
+                            saturating_add_assign!(transactions_added_to_retry, 1);
+                            //entry.or_insert(transaction_info);
+                            match sender.try_send(batch) {
+                                Ok(_) => {}
+                                Err(TrySendError::Full(msg)) => {
+                                    panic!(
+                                        "Should not ever happen because we will loose drained txs."
+                                    );
+                                }
+                                Err(TrySendError::Disconnected(_)) => {
+                                    warn!("STS channel is disconnected.");
                                     break;
-                                } else {
-                                    transaction_info.last_sent_time = Some(last_sent_time);
-                                    saturating_add_assign!(transactions_added_to_retry, 1);
-                                    entry.or_insert(transaction_info);
                                 }
                             }
+                            //}
+                            //}
                         }
                         stats.retry_queue_overflow.fetch_add(
                             transactions_to_retry.saturating_sub(transactions_added_to_retry)
                                 as u64,
                             Ordering::Relaxed,
                         );
-                        stats
-                            .retry_queue_size
-                            .store(retry_transactions.len() as u64, Ordering::Relaxed);
+                        //stats
+                        //    .retry_queue_size
+                        //    .store(retry_transactions.len() as u64, Ordering::Relaxed);
                     }
                     last_batch_sent = Instant::now();
                 }
@@ -296,7 +323,8 @@ impl SendTransactionService {
     fn retry_thread<Client: TransactionClient + std::marker::Send + 'static>(
         bank_forks: Arc<RwLock<BankForks>>,
         client: Client,
-        retry_transactions: Arc<Mutex<HashMap<Signature, TransactionInfo>>>,
+        //retry_transactions: Arc<Mutex<HashMap<Signature, TransactionInfo>>>,
+        receiver: Receiver<Vec<TransactionInfo>>,
         retry_rate_ms: u64,
         service_max_retries: usize,
         default_max_retries: Option<usize>,
@@ -305,6 +333,7 @@ impl SendTransactionService {
         exit: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         info!("Starting send-transaction-service::retry_thread with config.");
+        let mut transactions = HashMap::<Signature, TransactionInfo>::new();
         Builder::new()
             .name("solStxRetry".to_string())
             .spawn(move || loop {
@@ -316,29 +345,37 @@ impl SendTransactionService {
                 if exit.load(Ordering::Relaxed) {
                     break;
                 }
-                let mut transactions = retry_transactions.lock().unwrap();
-                if !transactions.is_empty() {
-                    stats
-                        .retry_queue_size
-                        .store(transactions.len() as u64, Ordering::Relaxed);
-                    let (root_bank, working_bank) = {
-                        let bank_forks = bank_forks.read().unwrap();
-                        (bank_forks.root_bank(), bank_forks.working_bank())
-                    };
 
-                    let _result = Self::process_transactions(
-                        &working_bank,
-                        &root_bank,
-                        &mut transactions,
-                        &client,
-                        retry_rate_ms,
-                        service_max_retries,
-                        default_max_retries,
-                        batch_size,
-                        stats,
-                    );
-                    stats_report.report();
+                //let mut transactions = retry_transactions.lock().unwrap();
+                let Ok(txs) = receiver.recv() else {
+                    // stop the service
+                    break;
+                };
+                for tx in txs {
+                    transactions.entry(tx.signature).or_insert(tx);
                 }
+                //if !transactions.is_empty() {
+                stats
+                    .retry_queue_size
+                    .store(transactions.len() as u64, Ordering::Relaxed);
+                let (root_bank, working_bank) = {
+                    let bank_forks = bank_forks.read().unwrap();
+                    (bank_forks.root_bank(), bank_forks.working_bank())
+                };
+
+                let _result = Self::process_transactions(
+                    &working_bank,
+                    &root_bank,
+                    &mut transactions,
+                    &client,
+                    retry_rate_ms,
+                    service_max_retries,
+                    default_max_retries,
+                    batch_size,
+                    stats,
+                );
+                stats_report.report();
+                //}
             })
             .unwrap()
     }
@@ -412,7 +449,7 @@ impl SendTransactionService {
 
             match signature_status {
                 None => {
-                    let now = Instant::now();
+                    let now: Instant = Instant::now();
                     let need_send = transaction_info
                         .last_sent_time
                         .map(|last| now.duration_since(last) >= retry_rate)
