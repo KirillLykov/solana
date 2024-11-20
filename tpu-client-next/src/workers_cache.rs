@@ -18,6 +18,7 @@ use {
 /// [`WorkerInfo`] holds information about a worker responsible for sending
 /// transaction batches.
 pub(crate) struct WorkerInfo {
+    certificate_generation_id: u64,
     sender: mpsc::Sender<TransactionBatch>,
     handle: JoinHandle<()>,
     cancel: CancellationToken,
@@ -25,11 +26,13 @@ pub(crate) struct WorkerInfo {
 
 impl WorkerInfo {
     pub fn new(
+        certificate_generation_id: u64,
         sender: mpsc::Sender<TransactionBatch>,
         handle: JoinHandle<()>,
         cancel: CancellationToken,
     ) -> Self {
         Self {
+            certificate_generation_id,
             sender,
             handle,
             cancel,
@@ -90,8 +93,16 @@ impl WorkersCache {
         }
     }
 
-    pub(crate) fn contains(&self, peer: &SocketAddr) -> bool {
-        self.workers.contains(peer)
+    pub(crate) fn contains(
+        &self,
+        peer: &SocketAddr,
+        current_certificate_generation_id: u64,
+    ) -> bool {
+        // If it contains the peer, check that the peer has the last certificate
+        match self.workers.peek(peer) {
+            Some(worker) => worker.certificate_generation_id == current_certificate_generation_id,
+            None => false,
+        }
     }
 
     pub(crate) fn push(

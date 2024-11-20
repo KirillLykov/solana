@@ -14,7 +14,14 @@ use {
     },
     log::*,
     quinn::Endpoint,
-    std::{net::SocketAddr, sync::Arc},
+    solana_sdk::signature::Keypair,
+    std::{
+        net::SocketAddr,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
+    },
     thiserror::Error,
     tokio::sync::mpsc,
     tokio_util::sync::CancellationToken,
@@ -26,7 +33,20 @@ use {
 ///
 /// Internally, it enables the management and coordination of multiple network
 /// connections, schedules and oversees connection workers.
-pub struct ConnectionWorkersScheduler;
+#[derive(Clone)]
+pub struct ConnectionWorkersScheduler {
+    endpoint: Endpoint,
+    cancel_main: CancellationToken,
+    // TODO the only problem is that changes in endpoint and in id are not
+    // atomic, these are two operations so that it is possible that:
+    // 1. endpoint have updated certificate but atomic is not incremented. It
+    //    means that these connections will be considered irrelevant and
+    //    re-created
+    // 2. endpoint haven't yet updated certificate but atomic is incremented. It
+    //    means that we will send txs using connection with wrong certificate,
+    //    this might be a error
+    current_certificate_generation_id: Arc<AtomicU64>,
+}
 
 /// Errors that arise from running [`ConnectionWorkersSchedulerError`].
 #[derive(Debug, Error, PartialEq)]
@@ -65,11 +85,11 @@ pub struct Fanout {
 /// behavior related to transaction handling.
 pub struct ConnectionWorkersSchedulerConfig {
     /// The local address to bind the scheduler to.
-    pub bind: SocketAddr,
+    //pub bind: SocketAddr,
 
     /// Quic client certificate which is derived from the stake identity keypair to identifying
     /// the sender.
-    pub client_certificate: QuicClientCertificate,
+    //pub client_certificate: QuicClientCertificate,
 
     /// The number of connections to be maintained by the scheduler.
     pub num_connections: usize,
@@ -90,6 +110,20 @@ pub struct ConnectionWorkersSchedulerConfig {
 }
 
 impl ConnectionWorkersScheduler {
+    pub fn new(
+        bind: SocketAddr,
+        validator_id: Option<&Keypair>,
+        cancel_main: CancellationToken,
+    ) -> Result<Self, ConnectionWorkersSchedulerError> {
+        let endpoint =
+            Self::setup_endpoint(bind, QuicClientCertificate::with_option(validator_id))?;
+        Ok(ConnectionWorkersScheduler {
+            endpoint,
+            cancel_main,
+            current_certificate_generation_id: Arc::new(AtomicU64::default()),
+        })
+    }
+
     /// Starts the scheduler, which manages the distribution of transactions to
     /// the network's upcoming leaders.
     ///
@@ -100,9 +134,9 @@ impl ConnectionWorkersScheduler {
     /// Importantly, if some transactions were not delivered due to network
     /// problems, they will not be retried when the problem is resolved.
     pub async fn run(
+        &self,
         ConnectionWorkersSchedulerConfig {
-            bind,
-            client_certificate,
+            //client_certificate,
             num_connections,
             skip_check_transaction_age,
             worker_channel_size,
@@ -111,11 +145,12 @@ impl ConnectionWorkersScheduler {
         }: ConnectionWorkersSchedulerConfig,
         mut leader_updater: Box<dyn LeaderUpdater>,
         mut transaction_receiver: mpsc::Receiver<TransactionBatch>,
-        cancel: CancellationToken,
     ) -> Result<SendTransactionStatsPerAddr, ConnectionWorkersSchedulerError> {
-        let endpoint = Self::setup_endpoint(bind, client_certificate)?;
-        debug!("Client endpoint bind address: {:?}", endpoint.local_addr());
-        let mut workers = WorkersCache::new(num_connections, cancel.clone());
+        debug!(
+            "Client endpoint bind address: {:?}",
+            self.endpoint.local_addr()
+        );
+        let mut workers = WorkersCache::new(num_connections, self.cancel_main.clone());
         let mut send_stats_per_addr = SendTransactionStatsPerAddr::new();
 
         loop {
@@ -127,7 +162,7 @@ impl ConnectionWorkersScheduler {
                         break;
                     }
                 },
-                () = cancel.cancelled() => {
+                () = self.cancel_main.cancelled() => {
                     debug!("Cancelled: Shutting down");
                     break;
                 }
@@ -140,11 +175,17 @@ impl ConnectionWorkersScheduler {
             // add future leaders to the cache to hide the latency of opening
             // the connection.
             for peer in connect_leaders {
-                if !workers.contains(peer) {
+                if !workers.contains(
+                    peer,
+                    self.current_certificate_generation_id
+                        .load(Ordering::SeqCst),
+                ) {
                     let stats = send_stats_per_addr.entry(peer.ip()).or_default();
                     let worker = Self::spawn_worker(
-                        &endpoint,
-                        peer,
+                        self.endpoint.clone(),
+                        self.current_certificate_generation_id
+                            .load(Ordering::SeqCst),
+                        peer.clone(),
                         worker_channel_size,
                         skip_check_transaction_age,
                         max_reconnect_attempts,
@@ -155,7 +196,11 @@ impl ConnectionWorkersScheduler {
             }
 
             for new_leader in fanout_leaders {
-                if !workers.contains(new_leader) {
+                if !workers.contains(
+                    new_leader,
+                    self.current_certificate_generation_id
+                        .load(Ordering::SeqCst),
+                ) {
                     warn!("No existing worker for {new_leader:?}, skip sending to this leader.");
                     continue;
                 }
@@ -181,9 +226,18 @@ impl ConnectionWorkersScheduler {
 
         workers.shutdown().await;
 
-        endpoint.close(0u32.into(), b"Closing connection");
+        self.endpoint.close(0u32.into(), b"Closing connection");
         leader_updater.stop().await;
         Ok(send_stats_per_addr)
+    }
+
+    /// Resets client config, it means that all the existing become invalid and
+    /// should be closed as well.
+    pub fn reset_client_config(&mut self, validator_id: Option<&Keypair>) {
+        let client_config = create_client_config(QuicClientCertificate::with_option(validator_id));
+        self.endpoint.set_default_client_config(client_config);
+        self.current_certificate_generation_id
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Sets up the QUIC endpoint for the scheduler to handle connections.
@@ -198,16 +252,16 @@ impl ConnectionWorkersScheduler {
 
     /// Spawns a worker to handle communication with a given peer.
     fn spawn_worker(
-        endpoint: &Endpoint,
-        peer: &SocketAddr,
+        //TODO What will happen if we already changed the endpoint certificate but not yet incremented the id?
+        endpoint: Endpoint,
+        certificate_generation_id: u64,
+        peer: SocketAddr,
         worker_channel_size: usize,
         skip_check_transaction_age: bool,
         max_reconnect_attempts: usize,
         stats: Arc<SendTransactionStats>,
     ) -> WorkerInfo {
         let (txs_sender, txs_receiver) = mpsc::channel(worker_channel_size);
-        let endpoint = endpoint.clone();
-        let peer = *peer;
 
         let (mut worker, cancel) = ConnectionWorker::new(
             endpoint,
@@ -221,7 +275,7 @@ impl ConnectionWorkersScheduler {
             worker.run().await;
         });
 
-        WorkerInfo::new(txs_sender, handle, cancel)
+        WorkerInfo::new(certificate_generation_id, txs_sender, handle, cancel)
     }
 }
 

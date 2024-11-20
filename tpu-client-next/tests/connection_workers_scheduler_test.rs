@@ -20,8 +20,7 @@ use {
         leader_updater::create_leader_updater,
         send_transaction_stats::SendTransactionStatsNonAtomic,
         transaction_batch::TransactionBatch,
-        ConnectionWorkersScheduler, ConnectionWorkersSchedulerError, QuicClientCertificate,
-        SendTransactionStatsPerAddr,
+        ConnectionWorkersScheduler, ConnectionWorkersSchedulerError, SendTransactionStatsPerAddr,
     },
     std::{
         collections::HashMap,
@@ -42,10 +41,8 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
-fn test_config(validator_identity: Option<Keypair>) -> ConnectionWorkersSchedulerConfig {
+fn test_config() -> ConnectionWorkersSchedulerConfig {
     ConnectionWorkersSchedulerConfig {
-        bind: SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 0),
-        client_certificate: QuicClientCertificate::with_option(validator_identity.as_ref()),
         num_connections: 1,
         skip_check_transaction_age: false,
         // At the moment we have only one strategy to send transactions: we try
@@ -84,15 +81,20 @@ async fn setup_connection_worker_scheduler(
         .expect("Leader updates was successfully created");
 
     let cancel = CancellationToken::new();
-    let config = test_config(validator_identity);
-    let scheduler = tokio::spawn(ConnectionWorkersScheduler::run(
-        config,
-        leader_updater,
-        transaction_receiver,
-        cancel.clone(),
-    ));
+    let config = test_config();
+    let bind = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 0);
+    let scheduler =
+        ConnectionWorkersScheduler::new(bind, validator_identity.as_ref(), cancel.clone()).unwrap();
+    let scheduler_res = {
+        let scheduler = scheduler.clone();
+        tokio::spawn(async move {
+            scheduler
+                .run(config, leader_updater, transaction_receiver)
+                .await
+        })
+    };
 
-    (scheduler, cancel)
+    (scheduler_res, cancel)
 }
 
 async fn join_scheduler(
