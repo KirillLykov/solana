@@ -242,8 +242,8 @@ pub fn spawn_tpu_client_send_txs<T>(
     tpu_peers: Option<Vec<SocketAddr>>,
     leader_info: Option<T>,
     leader_forward_count: u64,
-    client_certificate: QuicClientCertificate,
-) -> TpuClientNextClient
+    validator_identity: Option<&Keypair>,
+) -> (TpuClientNextClient, ConnectionWorkersScheduler)
 where
     T: TpuInfoWithSendStatic,
 {
@@ -251,8 +251,14 @@ where
 
     let (sender, receiver) = mpsc::channel(128);
     let cancel = CancellationToken::new();
+    let scheduler = ConnectionWorkersScheduler::new(
+        SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0),
+        validator_identity,
+        cancel.clone(), // TODO maybe dont need it
+    )
+    .unwrap(); // TODO handle error properly
     let _handle = runtime_handle.spawn({
-        let cancel = cancel.clone();
+        let scheduler = scheduler.clone();
         async move {
             let leader_updater: SendTransactionServiceLeaderUpdater<T> =
                 SendTransactionServiceLeaderUpdater {
@@ -261,8 +267,6 @@ where
                     tpu_peers,
                 };
             let config = ConnectionWorkersSchedulerConfig {
-                bind: SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0),
-                client_certificate,
                 // to match MAX_CONNECTIONS from ConnectionCache
                 num_connections: 1024,
                 skip_check_transaction_age: true,
@@ -273,19 +277,21 @@ where
                     send: leader_forward_count as usize,
                 },
             };
-            let _scheduler = tokio::spawn(ConnectionWorkersScheduler::run(
-                config,
-                Box::new(leader_updater),
-                receiver,
-                cancel.clone(),
-            ));
+            let _scheduler = tokio::spawn(async move {
+                scheduler
+                    .run(config, Box::new(leader_updater), receiver)
+                    .await
+            });
         }
     });
-    TpuClientNextClient {
-        runtime_handle,
-        sender,
-        cancel,
-    }
+    (
+        TpuClientNextClient {
+            runtime_handle,
+            sender,
+            cancel,
+        },
+        scheduler,
+    )
 }
 
 /// This structure wraps [`TpuClientNext`] so that the underlying task sending
@@ -295,7 +301,7 @@ where
 pub struct TpuClientNextClientUpdater {
     // Arc<Mutex> is needed to make TpuClientNextClientUpdater to be Sync, which
     // required by in many different places in the code.
-    key_update_sender: Arc<Mutex<mpsc::Sender<QuicClientCertificate>>>,
+    key_update_sender: Arc<Mutex<mpsc::Sender<Option<Keypair>>>>,
     client: Arc<TpuClientNextClient>,
 }
 
@@ -311,28 +317,26 @@ impl TpuClientNextClientUpdater {
     where
         T: TpuInfoWithSendStatic + Clone,
     {
-        let (key_update_sender, mut key_update_receiver) = mpsc::channel(1);
+        let (key_update_sender, mut key_update_receiver) = mpsc::channel::<Option<Keypair>>(1);
 
-        let client_certificate = QuicClientCertificate::with_option(validator_identity);
         // It is Arc to replace `client` later using `get_mut`.
-        let client = Arc::new(spawn_tpu_client_send_txs(
+        let (client, mut scheduler) = spawn_tpu_client_send_txs(
             runtime_handle.clone(),
             my_tpu_address,
             tpu_peers.clone(),
             leader_info.clone(),
             leader_forward_count,
-            client_certificate,
-        ));
+            validator_identity,
+        );
 
         // Spawn a background task to manage the client updates
         runtime_handle.spawn({
-            let mut client = client.clone();
-            let leader_info = leader_info.clone();
-            let runtime_handle = runtime_handle.clone();
+            //let leader_info = leader_info.clone();
+            //let runtime_handle = runtime_handle.clone();
             async move {
                 loop {
-                    if let Some(client_certificate) = key_update_receiver.recv().await {
-                        client.cancel();
+                    if let Some(validator_identity) = key_update_receiver.recv().await {
+                        /*client.cancel();
 
                         let new_client = spawn_tpu_client_send_txs(
                             runtime_handle.clone(),
@@ -344,7 +348,8 @@ impl TpuClientNextClientUpdater {
                         );
 
                         // Replace the client in the manager
-                        *Arc::get_mut(&mut client).expect("No other refs exist") = new_client;
+                        *Arc::get_mut(&mut client).expect("No other refs exist") = new_client;*/
+                        scheduler.reset_client_config(validator_identity.as_ref());
                     }
                 }
             }
@@ -352,7 +357,7 @@ impl TpuClientNextClientUpdater {
 
         Self {
             key_update_sender: Arc::new(Mutex::new(key_update_sender)),
-            client,
+            client: Arc::new(client),
         }
     }
 }
@@ -360,15 +365,14 @@ impl TpuClientNextClientUpdater {
 // Implement Cancelable for the Manager
 impl Cancelable for TpuClientNextClientUpdater {
     fn cancel(&self) {
-        self.client.cancel();
+        //self.client.cancel();
     }
 }
 
 impl NotifyKeyUpdate for TpuClientNextClientUpdater {
     fn update_key(&self, validator_identity: &Keypair) -> Result<(), Box<dyn std::error::Error>> {
-        let client_certificate = QuicClientCertificate::with_option(Some(validator_identity));
         let lock = self.key_update_sender.lock().unwrap();
-        lock.try_send(client_certificate)?;
+        lock.try_send(Some(validator_identity.insecure_clone()))?;
         Ok(())
     }
 }
