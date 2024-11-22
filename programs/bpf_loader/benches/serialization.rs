@@ -1,3 +1,4 @@
+/*
 #![feature(test)]
 
 extern crate test;
@@ -187,3 +188,4 @@ fn bench_serialize_aligned_max_accounts(bencher: &mut Bencher) {
         let _ = serialize_parameters(&transaction_context, instruction_context, false).unwrap();
     });
 }
+*/

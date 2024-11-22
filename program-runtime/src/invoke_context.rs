@@ -255,7 +255,10 @@ impl<'a> InvokeContext<'a> {
             )?;
         let program_id = instruction_context
             .get_last_program_key(self.transaction_context)
-            .map_err(|_| InstructionError::UnsupportedProgramId)?;
+            .map_err(|_| {
+                panic!("CCC");
+                InstructionError::UnsupportedProgramId
+            })?;
         if self
             .transaction_context
             .get_instruction_context_stack_height()
@@ -525,7 +528,10 @@ impl<'a> InvokeContext<'a> {
             debug_assert!(instruction_context.get_number_of_program_accounts() <= 1);
             let borrowed_root_account = instruction_context
                 .try_borrow_program_account(self.transaction_context, 0)
-                .map_err(|_| InstructionError::UnsupportedProgramId)?;
+                .map_err(|_| {
+                    panic!("DDD");
+                    InstructionError::UnsupportedProgramId
+                })?;
             let owner_id = borrowed_root_account.get_owner();
             if native_loader::check_id(owner_id) {
                 *borrowed_root_account.get_key()
@@ -536,10 +542,10 @@ impl<'a> InvokeContext<'a> {
 
         // The Murmur3 hash value (used by RBPF) of the string "entrypoint"
         const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
-        let entry = self
-            .program_cache_for_tx_batch
-            .find(&builtin_id)
-            .ok_or(InstructionError::UnsupportedProgramId)?;
+        let entry = self.program_cache_for_tx_batch.find(&builtin_id).ok_or({
+            panic!("XXX {}", builtin_id);
+            InstructionError::UnsupportedProgramId
+        })?;
         let function = match &entry.program {
             ProgramCacheEntryType::Builtin(program) => program
                 .get_function_registry()

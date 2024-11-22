@@ -198,6 +198,7 @@ declare_process_instruction!(Entrypoint, 0, |invoke_context| {
         && instruction != ProofInstruction::CloseContextState
     {
         // Proof verification instructions are not supported as an inner instruction
+        panic!("EEEE");
         return Err(InstructionError::UnsupportedProgramId);
     }
 

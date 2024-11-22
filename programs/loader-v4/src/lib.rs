@@ -453,6 +453,7 @@ pub fn process_instruction_inner(
             .find(program.get_key())
             .ok_or_else(|| {
                 ic_logger_msg!(log_collector, "Program is not cached");
+                panic!("Program is not cached");
                 InstructionError::UnsupportedProgramId
             })?;
         get_or_create_executor_time.stop();
@@ -468,11 +469,12 @@ pub fn process_instruction_inner(
             ProgramCacheEntryType::FailedVerification(_)
             | ProgramCacheEntryType::Closed
             | ProgramCacheEntryType::DelayVisibility => {
-                ic_logger_msg!(log_collector, "Program is not deployed");
+                panic!("Program is not deployed");
                 Err(Box::new(InstructionError::UnsupportedProgramId) as Box<dyn std::error::Error>)
             }
             ProgramCacheEntryType::Loaded(executable) => execute(executable, invoke_context),
             _ => {
+                panic!("BBB");
                 Err(Box::new(InstructionError::UnsupportedProgramId) as Box<dyn std::error::Error>)
             }
         }

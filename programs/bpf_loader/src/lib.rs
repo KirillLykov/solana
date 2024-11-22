@@ -415,17 +415,14 @@ pub fn process_instruction_inner(
             process_loader_upgradeable_instruction(invoke_context)
         } else if bpf_loader::check_id(program_id) {
             invoke_context.consume_checked(DEFAULT_LOADER_COMPUTE_UNITS)?;
-            ic_logger_msg!(
-                log_collector,
-                "BPF loader management instructions are no longer supported",
-            );
+            panic!("BPF loader management instructions are no longer supported",);
             Err(InstructionError::UnsupportedProgramId)
         } else if bpf_loader_deprecated::check_id(program_id) {
             invoke_context.consume_checked(DEPRECATED_LOADER_COMPUTE_UNITS)?;
-            ic_logger_msg!(log_collector, "Deprecated loader is no longer supported");
+            panic!("Deprecated loader is no longer supported");
             Err(InstructionError::UnsupportedProgramId)
         } else {
-            ic_logger_msg!(log_collector, "Invalid BPF loader id");
+            panic!("Invalid BPF loader id");
             Err(
                 if invoke_context
                     .get_feature_set()
@@ -457,7 +454,7 @@ pub fn process_instruction_inner(
         .program_cache_for_tx_batch
         .find(program_account.get_key())
         .ok_or_else(|| {
-            ic_logger_msg!(log_collector, "Program is not cached");
+            panic!("Program is not cached");
             if invoke_context
                 .get_feature_set()
                 .is_active(&remove_accounts_executable_flag_checks::id())
@@ -479,7 +476,7 @@ pub fn process_instruction_inner(
         ProgramCacheEntryType::FailedVerification(_)
         | ProgramCacheEntryType::Closed
         | ProgramCacheEntryType::DelayVisibility => {
-            ic_logger_msg!(log_collector, "Program is not deployed");
+            panic!("Program is not deployed");
             let instruction_error = if invoke_context
                 .get_feature_set()
                 .is_active(&remove_accounts_executable_flag_checks::id())
@@ -496,6 +493,7 @@ pub fn process_instruction_inner(
                 .get_feature_set()
                 .is_active(&remove_accounts_executable_flag_checks::id())
             {
+                panic!("AAAA ");
                 InstructionError::UnsupportedProgramId
             } else {
                 InstructionError::IncorrectProgramId
@@ -616,6 +614,7 @@ fn process_loader_upgradeable_instruction(
                 }
             } else {
                 ic_logger_msg!(log_collector, "Invalid Buffer account");
+                panic!("Invalid Buffer account");
                 return Err(InstructionError::InvalidArgument);
             }
             let buffer_key = *buffer.get_key();
@@ -639,6 +638,7 @@ fn process_loader_upgradeable_instruction(
             }
             if programdata_len > MAX_PERMITTED_DATA_LENGTH as usize {
                 ic_logger_msg!(log_collector, "Max data length is too large");
+                panic!("Max data length is too large");
                 return Err(InstructionError::InvalidArgument);
             }
 
@@ -646,7 +646,7 @@ fn process_loader_upgradeable_instruction(
             let (derived_address, bump_seed) =
                 Pubkey::find_program_address(&[new_program_id.as_ref()], program_id);
             if derived_address != programdata_key {
-                ic_logger_msg!(log_collector, "ProgramData address is not derived");
+                panic!("ProgramData address is not derived");
                 return Err(InstructionError::InvalidArgument);
             }
 
@@ -768,7 +768,7 @@ fn process_loader_upgradeable_instruction(
                 return Err(InstructionError::AccountNotExecutable);
             }
             if !program.is_writable() {
-                ic_logger_msg!(log_collector, "Program account not writeable");
+                panic!("Program account not writeable");
                 return Err(InstructionError::InvalidArgument);
             }
             if program.get_owner() != program_id {
@@ -780,7 +780,7 @@ fn process_loader_upgradeable_instruction(
             } = program.get_state()?
             {
                 if programdata_address != programdata_key {
-                    ic_logger_msg!(log_collector, "Program and ProgramData account mismatch");
+                    panic!("Program and ProgramData account mismatch");
                     return Err(InstructionError::InvalidArgument);
                 }
             } else {
@@ -804,7 +804,7 @@ fn process_loader_upgradeable_instruction(
                     return Err(InstructionError::MissingRequiredSignature);
                 }
             } else {
-                ic_logger_msg!(log_collector, "Invalid Buffer account");
+                panic!("Invalid Buffer account");
                 return Err(InstructionError::InvalidArgument);
             }
             let buffer_lamports = buffer.get_lamports();
@@ -846,7 +846,7 @@ fn process_loader_upgradeable_instruction(
             } = programdata.get_state()?
             {
                 if clock.slot == slot {
-                    ic_logger_msg!(log_collector, "Program was deployed in this block already");
+                    panic!("Program was deployed in this block already");
                     return Err(InstructionError::InvalidArgument);
                 }
                 if upgrade_authority_address.is_none() {
@@ -992,7 +992,7 @@ fn process_loader_upgradeable_instruction(
                     })?;
                 }
                 _ => {
-                    ic_logger_msg!(log_collector, "Account does not support authorities");
+                    panic!("Account does not support authorities");
                     return Err(InstructionError::InvalidArgument);
                 }
             }
@@ -1065,7 +1065,7 @@ fn process_loader_upgradeable_instruction(
                     })?;
                 }
                 _ => {
-                    ic_logger_msg!(log_collector, "Account does not support authorities");
+                    panic!("Account does not support authorities");
                     return Err(InstructionError::InvalidArgument);
                 }
             }
@@ -1120,7 +1120,7 @@ fn process_loader_upgradeable_instruction(
                     let program_key = *program_account.get_key();
 
                     if !program_account.is_writable() {
-                        ic_logger_msg!(log_collector, "Program account is not writable");
+                        panic!("Program account is not writable");
                         return Err(InstructionError::InvalidArgument);
                     }
                     if program_account.get_owner() != program_id {
@@ -1129,7 +1129,7 @@ fn process_loader_upgradeable_instruction(
                     }
                     let clock = invoke_context.get_sysvar_cache().get_clock()?;
                     if clock.slot == slot {
-                        ic_logger_msg!(log_collector, "Program was deployed in this block already");
+                        panic!("Program was deployed in this block already");
                         return Err(InstructionError::InvalidArgument);
                     }
 
@@ -1138,10 +1138,7 @@ fn process_loader_upgradeable_instruction(
                             programdata_address,
                         } => {
                             if programdata_address != close_key {
-                                ic_logger_msg!(
-                                    log_collector,
-                                    "ProgramData account does not match ProgramData account"
-                                );
+                                panic!("ProgramData account does not match ProgramData account");
                                 return Err(InstructionError::InvalidArgument);
                             }
 

@@ -17,7 +17,7 @@ use {
         pubkey::{Pubkey, PUBKEY_BYTES},
         system_instruction,
     },
-    std::convert::TryFrom,
+    std::{convert::TryFrom, io::Read},
 };
 
 pub const DEFAULT_COMPUTE_UNITS: u64 = 750;

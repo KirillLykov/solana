@@ -1,6 +1,6 @@
 use {
     criterion::{criterion_group, criterion_main, Criterion},
-    solana_bpf_loader_program::Entrypoint,
+    solana_bpf_loader_program::{test_utils, Entrypoint},
     solana_program_runtime::invoke_context::mock_process_instruction,
     solana_sdk::{
         account::{
@@ -16,6 +16,7 @@ use {
         rent::Rent,
         system_program, sysvar,
     },
+    std::{fs::File, io::Read},
 };
 
 #[derive(Default)]
@@ -132,6 +133,11 @@ impl TestSetup {
     }
 
     fn new_deploy_with_max_data_len() -> Self {
+        let mut file = File::open("../../program-test/src/programs/spl_token_2022-5.0.2.so")
+            .expect("file open failed");
+        let mut elf_orig = Vec::new();
+        file.read_to_end(&mut elf_orig).unwrap();
+
         let loader_address = bpf_loader_upgradeable::id();
 
         let recipient_address = Pubkey::new_unique();
@@ -140,7 +146,7 @@ impl TestSetup {
         let buffer_address = Pubkey::new_unique();
         let mut buffer_account = AccountSharedData::new(
             ACCOUNT_BALANCE,
-            UpgradeableLoaderState::size_of_buffer(PROGRAM_BUFFER_SIZE),
+            UpgradeableLoaderState::size_of_buffer(elf_orig.len()),
             &loader_address,
         );
         buffer_account
@@ -148,6 +154,11 @@ impl TestSetup {
                 authority_address: Some(authority_address),
             })
             .unwrap();
+        buffer_account
+            .data_as_mut_slice()
+            .get_mut(UpgradeableLoaderState::size_of_buffer_metadata()..)
+            .unwrap()
+            .copy_from_slice(&elf_orig);
 
         let program_address = Pubkey::new_unique();
         let mut program_account = AccountSharedData::new(
@@ -164,7 +175,7 @@ impl TestSetup {
             Pubkey::find_program_address(&[program_address.as_ref()], &loader_address);
         let mut programdata_account = AccountSharedData::new(
             ACCOUNT_BALANCE,
-            UpgradeableLoaderState::size_of_programdata(PROGRAM_BUFFER_SIZE),
+            UpgradeableLoaderState::size_of_programdata(elf_orig.len()),
             &loader_address,
         );
         programdata_account
@@ -256,7 +267,9 @@ impl TestSetup {
             self.instruction_accounts.clone(),
             Ok(()), //expected_result,
             Entrypoint::vm,
-            |_invoke_context| {},
+            |invoke_context| {
+                test_utils::load_all_invoked_programs(invoke_context);
+            },
             |_invoke_context| {},
         );
         let state: UpgradeableLoaderState = accounts.first().unwrap().state().unwrap();
