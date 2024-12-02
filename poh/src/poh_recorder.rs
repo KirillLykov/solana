@@ -369,7 +369,7 @@ impl PohRecorder {
     }
 
     // Return the slot for a given tick height
-    fn slot_for_tick_height(&self, tick_height: u64) -> Slot {
+    pub fn slot_for_tick_height(&self, tick_height: u64) -> Slot {
         // We need to subtract by one here because, assuming ticks per slot is 64,
         // tick heights [1..64] correspond to slot 0. The last tick height of a slot
         // is always a multiple of 64.
@@ -434,6 +434,10 @@ impl PohRecorder {
 
     pub fn ticks_per_slot(&self) -> u64 {
         self.ticks_per_slot
+    }
+
+    pub fn leader_schedule_cache(&self) -> Arc<LeaderScheduleCache> {
+        self.leader_schedule_cache.clone()
     }
 
     pub fn new_recorder(&self) -> TransactionRecorder {

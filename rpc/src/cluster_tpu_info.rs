@@ -49,13 +49,16 @@ impl TpuInfo for ClusterTpuInfo {
 
     fn get_unique_leader_tpus(&self, max_count: u64, protocol: Protocol) -> Vec<&SocketAddr> {
         let recorder = self.poh_recorder.read().unwrap();
-        let leaders: Vec<_> = (0..max_count)
-            .filter_map(|i| recorder.leader_after_n_slots(i * NUM_CONSECUTIVE_LEADER_SLOTS))
-            .collect();
+        let current_slot = recorder.slot_for_tick_height(recorder.tick_height());
+        let leader_schedule_cache = recorder.leader_schedule_cache();
         drop(recorder);
+        let leaders = (0..max_count).filter_map(|i| {
+            leader_schedule_cache
+                .slot_leader_at(current_slot + i * NUM_CONSECUTIVE_LEADER_SLOTS, None)
+        });
         let mut unique_leaders = vec![];
-        for leader in leaders.iter() {
-            if let Some(addr) = self.recent_peers.get(leader).map(|addr| match protocol {
+        for leader in leaders {
+            if let Some(addr) = self.recent_peers.get(&leader).map(|addr| match protocol {
                 Protocol::UDP => &addr.0,
                 Protocol::QUIC => &addr.1,
             }) {
@@ -69,15 +72,17 @@ impl TpuInfo for ClusterTpuInfo {
 
     fn get_leader_tpus(&self, max_count: u64, protocol: Protocol) -> Vec<&SocketAddr> {
         let recorder = self.poh_recorder.read().unwrap();
-        let leader_pubkeys: Vec<_> = (0..max_count)
-            .filter_map(|i| recorder.leader_after_n_slots(i * NUM_CONSECUTIVE_LEADER_SLOTS))
-            .collect();
+        let current_slot = recorder.slot_for_tick_height(recorder.tick_height());
+        let leader_schedule_cache = recorder.leader_schedule_cache();
         drop(recorder);
-        leader_pubkeys
-            .iter()
+        (0..max_count)
+            .filter_map(|i| {
+                leader_schedule_cache
+                    .slot_leader_at(current_slot + i * NUM_CONSECUTIVE_LEADER_SLOTS, None)
+            })
             .filter_map(|leader_pubkey| {
                 self.recent_peers
-                    .get(leader_pubkey)
+                    .get(&leader_pubkey)
                     .map(|addr| match protocol {
                         Protocol::UDP => &addr.0,
                         Protocol::QUIC => &addr.1,
