@@ -9,7 +9,6 @@
 //! Yet, it also allows to implement custom leader estimation.
 
 use {
-    async_trait::async_trait,
     log::*,
     solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS,
     solana_connection_cache::connection_cache::Protocol,
@@ -29,7 +28,6 @@ use {
 /// [`LeaderUpdater`] trait abstracts out functionality required for the
 /// [`ConnectionWorkersScheduler`](crate::ConnectionWorkersScheduler) to
 /// identify next leaders to send transactions to.
-#[async_trait]
 pub trait LeaderUpdater: Send {
     /// Returns next leaders for the next `lookahead_leaders` starting from
     /// current estimated slot.
@@ -101,7 +99,6 @@ struct LeaderUpdaterService {
     exit: Arc<AtomicBool>,
 }
 
-#[async_trait]
 impl LeaderUpdater for LeaderUpdaterService {
     fn next_leaders(&mut self, lookahead_leaders: usize) -> Vec<SocketAddr> {
         let lookahead_slots =
@@ -121,7 +118,6 @@ struct PinnedLeaderUpdater {
     address: Vec<SocketAddr>,
 }
 
-#[async_trait]
 impl LeaderUpdater for PinnedLeaderUpdater {
     fn next_leaders(&mut self, _lookahead_leaders: usize) -> Vec<SocketAddr> {
         self.address.clone()

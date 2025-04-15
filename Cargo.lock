@@ -10710,7 +10710,6 @@ dependencies = [
 name = "solana-tpu-client-next"
 version = "2.3.0"
 dependencies = [
- "async-trait",
  "crossbeam-channel",
  "futures 0.3.31",
  "log",

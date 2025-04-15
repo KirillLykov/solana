@@ -12,7 +12,6 @@ use {
         workers_cache::{maybe_shutdown_worker, WorkerInfo, WorkersCache, WorkersCacheError},
         SendTransactionStats,
     },
-    async_trait::async_trait,
     log::*,
     quinn::Endpoint,
     solana_keypair::Keypair,
@@ -127,7 +126,6 @@ impl From<StakeIdentity> for QuicClientCertificate {
 /// addresses. Implementations of this trait are used by the
 /// [`ConnectionWorkersScheduler`] to distribute transactions to workers
 /// accordingly.
-#[async_trait]
 pub trait WorkersBroadcaster {
     /// Sends a `transaction_batch` to workers associated with the given
     /// `leaders` addresses.
@@ -312,7 +310,6 @@ impl ConnectionWorkersScheduler {
 /// full, the transactions will not be sent to this worker.
 struct NonblockingBroadcaster;
 
-#[async_trait]
 impl WorkersBroadcaster for NonblockingBroadcaster {
     async fn send_to_workers(
         workers: &mut WorkersCache,
