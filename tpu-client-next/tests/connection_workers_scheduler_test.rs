@@ -2,6 +2,7 @@ use {
     crossbeam_channel::Receiver as CrossbeamReceiver,
     futures::future::BoxFuture,
     solana_cli_config::ConfigInput,
+    solana_clock::DEFAULT_MS_PER_SLOT,
     solana_commitment_config::CommitmentConfig,
     solana_keypair::Keypair,
     solana_net_utils::sockets::unique_port_range_for_tests,
@@ -22,7 +23,8 @@ use {
             BindTarget, ConnectionWorkersSchedulerConfig, Fanout, NonblockingBroadcaster,
             StakeIdentity,
         },
-        leader_updater::{create_leader_updater, LeaderUpdater},
+        leader_updater::create_leader_updater_with_config,
+        node_address_service::LeaderTpuCacheServiceConfig,
         send_transaction_stats::SendTransactionStatsNonAtomic,
         tpu_client_next::ClientBuilder,
         transaction_batch::TransactionBatch,
@@ -73,21 +75,6 @@ fn test_config(stake_identity: Option<Keypair>) -> ConnectionWorkersSchedulerCon
     }
 }
 
-async fn setup_leader_updater(tpu_address: SocketAddr) -> Box<dyn LeaderUpdater> {
-    let json_rpc_url = "http://127.0.0.1:8899";
-    let (_, websocket_url) = ConfigInput::compute_websocket_url_setting("", "", json_rpc_url, "");
-
-    let rpc_client = Arc::new(RpcClient::new_with_commitment(
-        json_rpc_url.to_string(),
-        CommitmentConfig::confirmed(),
-    ));
-
-    // Setup sending txs
-    create_leader_updater(rpc_client, websocket_url, Some(tpu_address))
-        .await
-        .expect("Leader updates was successfully created")
-}
-
 async fn setup_connection_worker_scheduler(
     tpu_address: SocketAddr,
     transaction_receiver: Receiver<TransactionBatch>,
@@ -97,8 +84,33 @@ async fn setup_connection_worker_scheduler(
     watch::Sender<Option<StakeIdentity>>,
     CancellationToken,
 ) {
-    let leader_updater = setup_leader_updater(tpu_address).await;
+    let json_rpc_url = "http://127.0.0.1:8899";
+    let (_, websocket_url) = ConfigInput::compute_websocket_url_setting("", "", json_rpc_url, "");
+
+    let rpc_client = Arc::new(RpcClient::new_with_commitment(
+        json_rpc_url.to_string(),
+        CommitmentConfig::confirmed(),
+    ));
+
+    let config = test_config(stake_identity);
+
+    // Setup sending txs
     let cancel = CancellationToken::new();
+    let updater_config = LeaderTpuCacheServiceConfig {
+        lookahead_leaders: config.leaders_fanout.connect as u64,
+        refresh_nodes_info_every: Duration::from_millis(DEFAULT_MS_PER_SLOT),
+        max_consecutive_failures: 1,
+    };
+    let leader_updater = create_leader_updater_with_config(
+        rpc_client,
+        websocket_url,
+        Some(tpu_address),
+        Some(updater_config),
+        cancel.clone(),
+    )
+    .await
+    .expect("Leader updates was successfully created");
+
     let (update_identity_sender, update_identity_receiver) = watch::channel(None);
     let scheduler = ConnectionWorkersScheduler::new(
         leader_updater,
@@ -106,7 +118,6 @@ async fn setup_connection_worker_scheduler(
         update_identity_receiver,
         cancel.clone(),
     );
-    let config = test_config(stake_identity);
     let scheduler = tokio::spawn(scheduler.run(config));
 
     (scheduler, update_identity_sender, cancel)
