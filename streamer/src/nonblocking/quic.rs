@@ -62,7 +62,7 @@ use {
         task::{self, JoinHandle},
         time::{sleep, timeout},
     },
-    tokio_util::sync::CancellationToken,
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
 
 pub const DEFAULT_WAIT_FOR_CHUNK_TIMEOUT: Duration = Duration::from_secs(2);
@@ -240,15 +240,23 @@ pub fn spawn_server_with_cancel(
     });
 
     let max_concurrent_connections = quic_server_params.max_concurrent_connections();
-    let handle = tokio::spawn(run_server(
-        name,
-        endpoints.clone(),
-        packet_batch_sender,
-        staked_nodes,
-        stats.clone(),
-        quic_server_params,
-        cancel,
-    ));
+    let handle = tokio::spawn({
+        let endpoints = endpoints.clone();
+        let stats = stats.clone();
+        async move {
+            let tasks = run_server(
+                name,
+                endpoints.clone(),
+                packet_batch_sender,
+                staked_nodes,
+                stats.clone(),
+                quic_server_params,
+                cancel,
+            )
+            .await;
+            tasks.wait().await;
+        }
+    });
 
     Ok(SpawnNonBlockingServerResult {
         endpoints,
@@ -312,7 +320,7 @@ async fn run_server(
     stats: Arc<StreamerStats>,
     quic_server_params: QuicServerParams,
     cancel: CancellationToken,
-) {
+) -> TaskTracker {
     let rate_limiter = Arc::new(ConnectionRateLimiter::new(
         quic_server_params.max_connections_per_ipaddr_per_min,
     ));
@@ -347,6 +355,7 @@ async fn run_server(
         })
         .collect::<FuturesUnordered<_>>();
 
+    let tasks = TaskTracker::new();
     loop {
         let timeout_connection = select! {
             ready = accepts.next() => {
@@ -406,7 +415,7 @@ async fn run_server(
                 Ok(connecting) => {
                     let rate_limiter = rate_limiter.clone();
                     let overall_connection_rate_limiter = overall_connection_rate_limiter.clone();
-                    tokio::spawn(setup_connection(
+                    tasks.spawn(setup_connection(
                         connecting,
                         rate_limiter,
                         overall_connection_rate_limiter,
@@ -418,6 +427,7 @@ async fn run_server(
                         stats.clone(),
                         stream_load_ema.clone(),
                         quic_server_params.clone(),
+                        tasks.clone(),
                     ));
                 }
                 Err(err) => {
@@ -431,6 +441,7 @@ async fn run_server(
             debug!("accept(): Timed out waiting for connection");
         }
     }
+    tasks
 }
 
 fn prune_unstaked_connection_table(
@@ -563,6 +574,7 @@ fn handle_and_cache_new_connection(
     connection_table: Arc<Mutex<ConnectionTable>>,
     params: &NewConnectionHandlerParams,
     stream_load_ema: Arc<StakedStreamLoadEMA>,
+    tasks: TaskTracker,
 ) -> Result<(), ConnectionHandlerError> {
     if let Ok(max_uni_streams) = VarInt::from_u64(compute_max_allowed_uni_streams(
         params.peer_type,
@@ -601,7 +613,7 @@ fn handle_and_cache_new_connection(
             }
             connection.set_max_concurrent_uni_streams(max_uni_streams);
 
-            tokio::spawn(handle_connection(
+            tasks.spawn(handle_connection(
                 connection,
                 remote_addr,
                 last_update,
@@ -638,6 +650,7 @@ async fn prune_unstaked_connections_and_add_new_connection(
     connection_table: Arc<Mutex<ConnectionTable>>,
     params: &NewConnectionHandlerParams,
     stream_load_ema: Arc<StakedStreamLoadEMA>,
+    tasks: TaskTracker,
 ) -> Result<(), ConnectionHandlerError> {
     let stats = params.stats.clone();
     if params.max_connections > 0 {
@@ -651,6 +664,7 @@ async fn prune_unstaked_connections_and_add_new_connection(
             connection_table_clone,
             params,
             stream_load_ema,
+            tasks,
         )
     } else {
         connection.close(
@@ -717,6 +731,7 @@ async fn setup_connection(
     stats: Arc<StreamerStats>,
     stream_load_ema: Arc<StakedStreamLoadEMA>,
     quic_server_params: QuicServerParams,
+    tasks: TaskTracker,
 ) {
     const PRUNE_RANDOM_SAMPLE_SIZE: usize = 2;
     let from = connecting.remote_address();
@@ -815,6 +830,7 @@ async fn setup_connection(
                                 staked_connection_table.clone(),
                                 &params,
                                 stream_load_ema.clone(),
+                                tasks,
                             ) {
                                 stats
                                     .connection_added_from_staked_peer
@@ -830,6 +846,7 @@ async fn setup_connection(
                                 unstaked_connection_table.clone(),
                                 &params,
                                 stream_load_ema.clone(),
+                                tasks,
                             )
                             .await
                             {
@@ -853,6 +870,7 @@ async fn setup_connection(
                             unstaked_connection_table.clone(),
                             &params,
                             stream_load_ema.clone(),
+                            tasks,
                         )
                         .await
                         {
