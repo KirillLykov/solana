@@ -944,6 +944,7 @@ impl LeaderTpuService {
         let mut estimated_slot_duration = Duration::from_millis(DEFAULT_MS_PER_SLOT);
         let alpha: f64 = 0.1; // smoothing factor (tune as needed)
         let mut last_slot_time = Instant::now();
+        let mut prev_slot = 0;
 
         let mut last_update = Instant::now();
         while !exit.load(Ordering::Relaxed) {
@@ -961,15 +962,18 @@ impl LeaderTpuService {
                 };
 
                 // measure observed slot duration
-                let now = Instant::now();
-                let observed = now.duration_since(last_slot_time);
-                last_slot_time = now;
+                if current_slot > prev_slot {
+                    let now = Instant::now();
+                    let observed = now.duration_since(last_slot_time);
+                    last_slot_time = now;
 
-                // update EMA (exponential moving average)
-                let obs_ms = observed.as_millis() as f64;
-                let est_ms = estimated_slot_duration.as_millis() as f64;
-                let new_est = (1.0 - alpha) * est_ms + alpha * obs_ms;
-                estimated_slot_duration = Duration::from_millis(new_est as u64);
+                    // update EMA (exponential moving average)
+                    let obs_ms = observed.as_millis() as f64;
+                    let est_ms = estimated_slot_duration.as_millis() as f64;
+                    let new_est = (1.0 - alpha) * est_ms + alpha * obs_ms;
+                    estimated_slot_duration = Duration::from_millis(new_est as u64);
+                    prev_slot = current_slot;
+                }
 
                 recent_slots.record_slot(current_slot);
                 last_update = Instant::now();
