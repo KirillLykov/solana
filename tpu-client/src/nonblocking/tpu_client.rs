@@ -941,6 +941,10 @@ impl LeaderTpuService {
         // this, we introduce fallback mechanicsm for slot updates.
         const FALLBACK_THRESHOLD: Duration = Duration::from_millis(DEFAULT_MS_PER_SLOT);
 
+        let mut estimated_slot_duration = Duration::from_millis(DEFAULT_MS_PER_SLOT);
+        let alpha: f64 = 0.1; // smoothing factor (tune as needed)
+        let mut last_slot_time = Instant::now();
+
         let mut last_update = Instant::now();
         while !exit.load(Ordering::Relaxed) {
             let mut injected = false;
@@ -955,14 +959,26 @@ impl LeaderTpuService {
                     SlotUpdate::FirstShredReceived { slot, .. } => slot,
                     _ => continue,
                 };
+
+                // measure observed slot duration
+                let now = Instant::now();
+                let observed = now.duration_since(last_slot_time);
+                last_slot_time = now;
+
+                // update EMA (exponential moving average)
+                let obs_ms = observed.as_millis() as f64;
+                let est_ms = estimated_slot_duration.as_millis() as f64;
+                let new_est = (1.0 - alpha) * est_ms + alpha * obs_ms;
+                estimated_slot_duration = Duration::from_millis(new_est as u64);
+
                 recent_slots.record_slot(current_slot);
                 last_update = Instant::now();
                 injected = true;
             }
 
-            if !injected && last_update.elapsed() >= FALLBACK_THRESHOLD {
+            if !injected && last_update.elapsed() >= estimated_slot_duration {
                 let estimated = recent_slots.estimated_current_slot().saturating_add(1);
-                info!("Injecting fallback slot {estimated}");
+                info!("Injecting fallback slot {estimated}, estimated duration: {estimated_slot_duration:?}");
                 recent_slots.record_slot(estimated);
                 recent_slots.record_slot(estimated);
                 last_update = Instant::now();
