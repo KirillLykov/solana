@@ -1,3 +1,7 @@
+use core::time;
+
+use log::debug;
+
 pub use crate::nonblocking::tpu_client::TpuSenderError;
 use {
     crate::nonblocking::tpu_client::TpuClient as NonblockingTpuClient,
@@ -12,6 +16,7 @@ use {
     },
     solana_rpc_client::rpc_client::RpcClient,
     solana_signature::Signature,
+    solana_time_utils::timestamp,
     solana_transaction::{versioned::VersionedTransaction, Transaction},
     solana_transaction_error::{TransportError, TransportResult},
     std::{
@@ -273,17 +278,18 @@ where
 const MAX_SLOT_SKIP_DISTANCE: u64 = 48;
 
 #[derive(Clone, Debug)]
-pub(crate) struct RecentLeaderSlots(Arc<RwLock<VecDeque<Slot>>>);
+pub(crate) struct RecentLeaderSlots(Arc<RwLock<VecDeque<(Slot, u64)>>>);
 impl RecentLeaderSlots {
     pub(crate) fn new(current_slot: Slot) -> Self {
         let mut recent_slots = VecDeque::new();
-        recent_slots.push_back(current_slot);
+        recent_slots.push_back((current_slot, timestamp()));
         Self(Arc::new(RwLock::new(recent_slots)))
     }
 
     pub(crate) fn record_slot(&self, current_slot: Slot) {
+        let timestamp = timestamp();
         let mut recent_slots = self.0.write().unwrap();
-        recent_slots.push_back(current_slot);
+        recent_slots.push_back((current_slot, timestamp));
         // 12 recent slots should be large enough to avoid a misbehaving
         // validator from affecting the median recent slot
         while recent_slots.len() > 12 {
@@ -293,7 +299,7 @@ impl RecentLeaderSlots {
 
     // Estimate the current slot from recent slot notifications.
     pub(crate) fn estimated_current_slot(&self) -> Slot {
-        let mut recent_slots: Vec<Slot> = self.0.read().unwrap().iter().cloned().collect();
+        let mut recent_slots: Vec<(Slot, u64)> = self.0.read().unwrap().iter().cloned().collect();
         assert!(!recent_slots.is_empty());
         recent_slots.sort_unstable();
 
@@ -301,23 +307,32 @@ impl RecentLeaderSlots {
         // so check if the current slot is in line with the recent progression.
         let max_index = recent_slots.len() - 1;
         let median_index = max_index / 2;
-        let median_recent_slot = recent_slots[median_index];
+        let median_recent_slot = recent_slots[median_index].0;
         let expected_current_slot = median_recent_slot + (max_index - median_index) as u64;
         let max_reasonable_current_slot = expected_current_slot + MAX_SLOT_SKIP_DISTANCE;
 
+        let rs = recent_slots.clone();
         // Return the highest slot that doesn't exceed what we believe is a
         // reasonable slot.
-        recent_slots
+        let (slot, _slot_timestamp) = recent_slots
             .into_iter()
             .rev()
-            .find(|slot| *slot <= max_reasonable_current_slot)
-            .unwrap()
+            .find(|(slot, _timestamp)| *slot <= max_reasonable_current_slot)
+            .unwrap();
+        debug!("@@@ estimated_current_slot: {slot}, recent_slots: {rs:?}");
+        slot
+        // TODO Doesn't work, not sure why
+        //if timestamp() - slot_timestamp > 200 {
+        //    slot + 1
+        //} else {
+        //    slot
+        //}
     }
 }
 
 #[cfg(test)]
-impl From<Vec<Slot>> for RecentLeaderSlots {
-    fn from(recent_slots: Vec<Slot>) -> Self {
+impl From<Vec<(Slot, u64)>> for RecentLeaderSlots {
+    fn from(recent_slots: Vec<(Slot, u64)>) -> Self {
         assert!(!recent_slots.is_empty());
         Self(Arc::new(RwLock::new(recent_slots.into_iter().collect())))
     }

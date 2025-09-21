@@ -940,10 +940,16 @@ impl LeaderTpuService {
                 let current_slot = match update {
                     // This update indicates that a full slot was received by the connected
                     // node so we can stop sending transactions to the leader for that slot
-                    SlotUpdate::Completed { slot, .. } => slot.saturating_add(1),
+                    SlotUpdate::Completed { slot, .. } => {
+                        debug!("@@@ SlotUpdate::Completed: {slot}");
+                        slot.saturating_add(1)
+                    }
                     // This update indicates that we have just received the first shred from
                     // the leader for this slot and they are probably still accepting transactions.
-                    SlotUpdate::FirstShredReceived { slot, .. } => slot,
+                    SlotUpdate::FirstShredReceived { slot, .. } => {
+                        debug!("@@@ SlotUpdate::FirstShredReceived: {slot}");
+                        slot
+                    }
                     _ => continue,
                 };
                 recent_slots.record_slot(current_slot);

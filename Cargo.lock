@@ -11332,6 +11332,7 @@ dependencies = [
  "solana-rpc-client-api",
  "solana-signature",
  "solana-signer",
+ "solana-time-utils",
  "solana-transaction",
  "solana-transaction-error",
  "thiserror 2.0.16",
