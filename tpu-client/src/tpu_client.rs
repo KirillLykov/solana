@@ -314,19 +314,19 @@ impl RecentLeaderSlots {
         let rs = recent_slots.clone();
         // Return the highest slot that doesn't exceed what we believe is a
         // reasonable slot.
-        let (slot, _slot_timestamp) = recent_slots
+        let (slot, slot_timestamp) = recent_slots
             .into_iter()
             .rev()
             .find(|(slot, _timestamp)| *slot <= max_reasonable_current_slot)
             .unwrap();
         debug!("@@@ estimated_current_slot: {slot}, recent_slots: {rs:?}");
-        slot
         // TODO Doesn't work, not sure why
-        //if timestamp() - slot_timestamp > 200 {
-        //    slot + 1
-        //} else {
-        //    slot
-        //}
+        if timestamp() - slot_timestamp > 300 {
+            debug!("@@@ correction + 1");
+            slot + 1
+        } else {
+            slot
+        }
     }
 }
 
