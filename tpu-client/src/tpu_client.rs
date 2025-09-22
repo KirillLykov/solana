@@ -296,7 +296,7 @@ impl RecentLeaderSlots {
         if is_start {
             recent_slots.1.start(current_slot, timestamp);
         } else {
-            recent_slots.1.end(current_slot, timestamp);
+            recent_slots.1.end(current_slot - 1, timestamp);
         }
         // 12 recent slots should be large enough to avoid a misbehaving
         // validator from affecting the median recent slot
@@ -333,12 +333,12 @@ impl RecentLeaderSlots {
             .unwrap();
         debug!("@@@ estimated_current_slot: {slot}, recent_slots: {rs:?}, median_duration: {median_duration}");
         // TODO Doesn't work, not sure why
-        if (timestamp() - slot_timestamp) as f64 > median_duration * 0.8 {
-            debug!("@@@ correction + 1");
-            slot + 1
-        } else {
-            slot
-        }
+        //if (timestamp() - slot_timestamp) as f64 > median_duration * 0.8 {
+        //    debug!("@@@ correction + 1");
+        slot + 1
+        //} else {
+        //    slot
+        //}
     }
 }
 
