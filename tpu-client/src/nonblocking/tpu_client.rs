@@ -937,22 +937,22 @@ impl LeaderTpuService {
 
         while !exit.load(Ordering::Relaxed) {
             while let Ok(Some(update)) = timeout(SLOT_UPDATE_TIMEOUT, notifications.next()).await {
-                let current_slot = match update {
+                match update {
                     // This update indicates that a full slot was received by the connected
                     // node so we can stop sending transactions to the leader for that slot
                     SlotUpdate::Completed { slot, .. } => {
                         debug!("@@@ SlotUpdate::Completed: {slot}");
-                        slot.saturating_add(1)
+                        let current_slot = slot.saturating_add(1);
+                        recent_slots.record_slot(current_slot, false);
                     }
                     // This update indicates that we have just received the first shred from
                     // the leader for this slot and they are probably still accepting transactions.
                     SlotUpdate::FirstShredReceived { slot, .. } => {
                         debug!("@@@ SlotUpdate::FirstShredReceived: {slot}");
-                        slot
+                        recent_slots.record_slot(slot, true);
                     }
                     _ => continue,
                 };
-                recent_slots.record_slot(current_slot);
             }
         }
 

@@ -278,28 +278,40 @@ where
 const MAX_SLOT_SKIP_DISTANCE: u64 = 48;
 
 #[derive(Clone, Debug)]
-pub(crate) struct RecentLeaderSlots(Arc<RwLock<VecDeque<(Slot, u64)>>>);
+pub(crate) struct RecentLeaderSlots(Arc<RwLock<(VecDeque<(Slot, u64)>, IntervalWindow)>>);
 impl RecentLeaderSlots {
     pub(crate) fn new(current_slot: Slot) -> Self {
         let mut recent_slots = VecDeque::new();
         recent_slots.push_back((current_slot, timestamp()));
-        Self(Arc::new(RwLock::new(recent_slots)))
+        Self(Arc::new(RwLock::new((
+            recent_slots,
+            IntervalWindow::new(current_slot, 100),
+        ))))
     }
 
-    pub(crate) fn record_slot(&self, current_slot: Slot) {
+    pub(crate) fn record_slot(&self, current_slot: Slot, is_start: bool) {
         let timestamp = timestamp();
         let mut recent_slots = self.0.write().unwrap();
-        recent_slots.push_back((current_slot, timestamp));
+        recent_slots.0.push_back((current_slot, timestamp));
+        if is_start {
+            recent_slots.1.start(current_slot, timestamp);
+        } else {
+            recent_slots.1.end(current_slot, timestamp);
+        }
         // 12 recent slots should be large enough to avoid a misbehaving
         // validator from affecting the median recent slot
-        while recent_slots.len() > 12 {
-            recent_slots.pop_front();
+        while recent_slots.0.len() > 12 {
+            recent_slots.0.pop_front();
         }
     }
 
     // Estimate the current slot from recent slot notifications.
     pub(crate) fn estimated_current_slot(&self) -> Slot {
-        let mut recent_slots: Vec<(Slot, u64)> = self.0.read().unwrap().iter().cloned().collect();
+        let (mut recent_slots, median_duration) = {
+            let x = self.0.read().unwrap();
+            let median_duration = x.1.median_duration();
+            (x.0.iter().cloned().collect::<Vec<_>>(), median_duration)
+        };
         assert!(!recent_slots.is_empty());
         recent_slots.sort_unstable();
 
@@ -319,13 +331,62 @@ impl RecentLeaderSlots {
             .rev()
             .find(|(slot, _timestamp)| *slot <= max_reasonable_current_slot)
             .unwrap();
-        debug!("@@@ estimated_current_slot: {slot}, recent_slots: {rs:?}");
+        debug!("@@@ estimated_current_slot: {slot}, recent_slots: {rs:?}, median_duration: {median_duration}");
         // TODO Doesn't work, not sure why
-        if timestamp() - slot_timestamp > 300 {
+        if (timestamp() - slot_timestamp) as f64 > median_duration * 0.8 {
             debug!("@@@ correction + 1");
             slot + 1
         } else {
             slot
+        }
+    }
+}
+
+use std::collections::HashMap;
+
+#[derive(Debug)]
+struct IntervalWindow {
+    active: HashMap<Slot, u64>,
+    window: VecDeque<(Slot, u64)>,
+    cap: usize,
+}
+
+impl IntervalWindow {
+    fn new(current_slot: Slot, cap: usize) -> Self {
+        let timestamp = timestamp();
+        let mut active = HashMap::new();
+        active.insert(current_slot, timestamp);
+        let window = VecDeque::from([(current_slot, 400)]);
+        Self {
+            active,
+            window,
+            cap,
+        }
+    }
+
+    fn start(&mut self, id: Slot, t: u64) {
+        self.active.insert(id, t);
+    }
+
+    fn end(&mut self, id: Slot, t: u64) {
+        if let Some(t0) = self.active.remove(&id) {
+            let len = t.saturating_sub(t0);
+            self.window.push_back((id, len));
+            if self.window.len() > self.cap {
+                self.window.pop_front();
+            }
+        }
+    }
+
+    fn median_duration(&self) -> f64 {
+        assert!(!self.window.is_empty());
+        let mut recent_slots: Vec<(Slot, u64)> = self.window.iter().copied().collect();
+        recent_slots.sort_unstable();
+        let mid = recent_slots.len() / 2;
+        if recent_slots.len() % 2 == 1 {
+            recent_slots[mid].1 as f64
+        } else {
+            (recent_slots[mid - 1].1 as f64 + recent_slots[mid].1 as f64) / 2.0
         }
     }
 }
