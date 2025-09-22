@@ -347,7 +347,7 @@ use std::collections::HashMap;
 #[derive(Debug)]
 struct IntervalWindow {
     active: HashMap<Slot, u64>,
-    window: VecDeque<(Slot, u64)>,
+    window: VecDeque<u64>,
     cap: usize,
 }
 
@@ -356,7 +356,7 @@ impl IntervalWindow {
         let timestamp = timestamp();
         let mut active = HashMap::new();
         active.insert(current_slot, timestamp);
-        let window = VecDeque::from([(current_slot, 400)]);
+        let window = VecDeque::from([400]);
         Self {
             active,
             window,
@@ -371,7 +371,7 @@ impl IntervalWindow {
     fn end(&mut self, id: Slot, t: u64) {
         if let Some(t0) = self.active.remove(&id) {
             let len = t.saturating_sub(t0);
-            self.window.push_back((id, len));
+            self.window.push_back(len);
             if self.window.len() > self.cap {
                 self.window.pop_front();
             }
@@ -380,13 +380,14 @@ impl IntervalWindow {
 
     fn median_duration(&self) -> f64 {
         assert!(!self.window.is_empty());
-        let mut recent_slots: Vec<(Slot, u64)> = self.window.iter().copied().collect();
+        let mut recent_slots: Vec<u64> = self.window.iter().copied().collect();
+        debug!("@@@ recent durations: {recent_slots:?}");
         recent_slots.sort_unstable();
         let mid = recent_slots.len() / 2;
         if recent_slots.len() % 2 == 1 {
-            recent_slots[mid].1 as f64
+            recent_slots[mid] as f64
         } else {
-            (recent_slots[mid - 1].1 as f64 + recent_slots[mid].1 as f64) / 2.0
+            (recent_slots[mid - 1] as f64 + recent_slots[mid] as f64) / 2.0
         }
     }
 }
