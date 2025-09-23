@@ -333,7 +333,7 @@ impl RecentLeaderSlots {
             .unwrap();
         debug!("@@@ estimated_current_slot: {slot}, recent_slots: {rs:?}, median_duration: {median_duration}");
         // TODO Doesn't work, not sure why
-        if (timestamp() - slot_timestamp) as f64 > median_duration * 0.8 {
+        if (timestamp() - slot_timestamp) as f64 > median_duration * 0.5 {
             debug!("@@@ correction + 1");
             slot + 1
         } else {
