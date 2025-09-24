@@ -749,7 +749,10 @@ impl Validator {
                 .validator_exit
                 .write()
                 .unwrap()
-                .register_exit(Box::new(move || cancel.cancel()));
+                .register_exit(Box::new(move || {
+                    error!("@@@ CANCELING TPU CLIENT");
+                    cancel.cancel();
+                }));
         }
 
         let (

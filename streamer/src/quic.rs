@@ -637,7 +637,7 @@ impl Default for QuicServerParams {
             wait_for_chunk_timeout: DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
             coalesce: DEFAULT_TPU_COALESCE,
             coalesce_channel_size: DEFAULT_MAX_COALESCE_CHANNEL_SIZE,
-            num_threads: NonZeroUsize::new(num_cpus::get().min(1)).expect("1 is non-zero"),
+            num_threads: NonZeroUsize::new(num_cpus::get().min(4)).expect("1 is non-zero"),
         }
     }
 }
@@ -707,6 +707,7 @@ pub fn spawn_server_with_cancel(
     quic_server_params: QuicServerParams,
     cancel: CancellationToken,
 ) -> Result<SpawnServerResult, QuicServerError> {
+    error!("@@@ NUM_THREADS = {}", quic_server_params.num_threads);
     let runtime = rt(format!("{thread_name}Rt"), quic_server_params.num_threads);
     let result = {
         let _guard = runtime.enter();

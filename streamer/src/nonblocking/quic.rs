@@ -254,7 +254,9 @@ pub fn spawn_server_with_cancel(
                 cancel,
             )
             .await;
+            error!("@@@ WAITING FOR {:?}", tasks);
             tasks.wait().await;
+            error!("@@@ SERVER SHUTDOWN");
         }
     });
 
@@ -375,7 +377,12 @@ async fn run_server(
             _ = tokio::time::sleep(WAIT_FOR_CONNECTION_TIMEOUT) => {
                 Err(())
             }
-            _ = cancel.cancelled() => break,
+            _ = cancel.cancelled() => {
+                error!("@@@ Cancel main loop");
+                tasks.close();
+                error!("@@@ {:?}", tasks);
+                return tasks;
+            }
         };
 
         if last_datapoint.elapsed().as_secs() >= 5 {
@@ -1112,10 +1119,21 @@ async fn handle_connection(
     );
     stats.total_connections.fetch_add(1, Ordering::Relaxed);
 
+    error!("@@@ ENTER {}, TOKEN: {:p}", remote_addr, &cancel);
     'conn: loop {
+        error!("LOPP");
+        if cancel.is_cancelled() {
+            error!("@@@ Cancel connection loop {} in wrong way", remote_addr);
+            break;
+        }
         // Wait for new streams. If the peer is disconnected we get a cancellation signal and stop
         // the connection task.
         let mut stream = select! {
+            biased;
+            _ = cancel.cancelled() => {
+                error!("@@@ Cancel external loop {}", remote_addr);
+                break;
+            },
             stream = connection.accept_uni() => match stream {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -1123,7 +1141,6 @@ async fn handle_connection(
                     break;
                 }
             },
-            _ = cancel.cancelled() => break,
         };
 
         let max_streams_per_throttling_interval =
@@ -1157,7 +1174,7 @@ async fn handle_connection(
                             .fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                sleep(throttle_duration).await;
+                //sleep(throttle_duration).await;
             }
         }
         stream_load_ema.increment_load(peer_type);
@@ -1185,12 +1202,17 @@ async fn handle_connection(
             // before then, we assume the stream is dead. This can only happen if there's severe
             // packet loss or the peer stops sending for whatever reason.
             let n_chunks = match tokio::select! {
+                biased;
+                // If the peer gets disconnected stop the task right away.
+                _ = cancel.cancelled() => {
+                    error!("@@@ Cancel internal loop {}", remote_addr);
+                    break;
+                }
+
                 chunk = tokio::time::timeout(
                     params.wait_for_chunk_timeout,
                     stream.read_chunks(&mut chunks)) => chunk,
 
-                // If the peer gets disconnected stop the task right away.
-                _ = cancel.cancelled() => break,
             } {
                 // read_chunk returned success
                 Ok(Ok(chunk)) => chunk.unwrap_or(0),
@@ -1244,6 +1266,7 @@ async fn handle_connection(
         stream_load_ema.update_ema_if_needed();
     }
 
+    error!("@@@ OUt of Loop");
     let stable_id = connection.stable_id();
     let removed_connection_count = {
         let mut connection_table = connection_table.lock().await;
@@ -1266,6 +1289,7 @@ async fn handle_connection(
             .fetch_add(1, Ordering::Relaxed);
     }
     stats.total_connections.fetch_sub(1, Ordering::Relaxed);
+    error!("@@@ EXIT {}", remote_addr);
 }
 
 enum StreamState {
@@ -1539,6 +1563,10 @@ impl ConnectionTable {
             .unwrap_or(false);
         if has_connection_capacity {
             let cancel = self.cancel.child_token();
+            error!(
+                "@@@ Parent token ptr: {:p}, child {:p}",
+                &self.cancel, &cancel
+            );
             let last_update = Arc::new(AtomicU64::new(last_update));
             let stream_counter = connection_entry
                 .first()
@@ -1554,7 +1582,7 @@ impl ConnectionTable {
                 stream_counter.clone(),
             ));
             self.total_size += 1;
-            Some((last_update, cancel, stream_counter))
+            Some((last_update, self.cancel.clone(), stream_counter))
         } else {
             if let Some(connection) = connection {
                 connection.close(

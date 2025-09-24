@@ -4970,6 +4970,7 @@ fn test_duplicate_with_pruned_ancestor() {
 #[test]
 #[serial]
 fn test_boot_from_local_state() {
+    console_subscriber::init();
     solana_logger::setup_with_default("error,local_cluster=info");
     const FULL_SNAPSHOT_INTERVAL: SnapshotInterval =
         SnapshotInterval::Slots(NonZeroU64::new(100).unwrap());
