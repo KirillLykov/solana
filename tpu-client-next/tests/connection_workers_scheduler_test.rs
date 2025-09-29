@@ -19,18 +19,23 @@ use {
     },
     solana_tpu_client_next::{
         connection_workers_scheduler::{
-            BindTarget, ConnectionWorkersSchedulerConfig, Fanout, StakeIdentity,
+            BindTarget, ConnectionWorkersSchedulerConfig, Fanout, NonblockingBroadcaster,
+            StakeIdentity,
         },
-        leader_updater::create_leader_updater,
+        leader_updater::{create_leader_updater, LeaderUpdater},
         send_transaction_stats::SendTransactionStatsNonAtomic,
         transaction_batch::TransactionBatch,
-        ConnectionWorkersScheduler, ConnectionWorkersSchedulerError, SendTransactionStats,
+        ClientBuilder, ConnectionWorkersScheduler, ConnectionWorkersSchedulerError,
+        SendTransactionStats,
     },
     std::{
         collections::HashMap,
         net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
         num::Saturating,
-        sync::Arc,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
         time::Duration,
     },
     tokio::{
@@ -39,7 +44,7 @@ use {
             oneshot, watch,
         },
         task::JoinHandle,
-        time::{sleep, Instant},
+        time::{interval, sleep, Instant},
     },
     tokio_util::sync::CancellationToken,
 };
@@ -68,15 +73,7 @@ fn test_config(stake_identity: Option<Keypair>) -> ConnectionWorkersSchedulerCon
     }
 }
 
-async fn setup_connection_worker_scheduler(
-    tpu_address: SocketAddr,
-    transaction_receiver: Receiver<TransactionBatch>,
-    stake_identity: Option<Keypair>,
-) -> (
-    JoinHandle<Result<Arc<SendTransactionStats>, ConnectionWorkersSchedulerError>>,
-    watch::Sender<Option<StakeIdentity>>,
-    CancellationToken,
-) {
+async fn setup_leader_updater(tpu_address: SocketAddr) -> Box<dyn LeaderUpdater> {
     let json_rpc_url = "http://127.0.0.1:8899";
     let (_, websocket_url) = ConfigInput::compute_websocket_url_setting("", "", json_rpc_url, "");
 
@@ -86,10 +83,21 @@ async fn setup_connection_worker_scheduler(
     ));
 
     // Setup sending txs
-    let leader_updater = create_leader_updater(rpc_client, websocket_url, Some(tpu_address))
+    create_leader_updater(rpc_client, websocket_url, Some(tpu_address))
         .await
-        .expect("Leader updates was successfully created");
+        .expect("Leader updates was successfully created")
+}
 
+async fn setup_connection_worker_scheduler(
+    tpu_address: SocketAddr,
+    transaction_receiver: Receiver<TransactionBatch>,
+    stake_identity: Option<Keypair>,
+) -> (
+    JoinHandle<Result<Arc<SendTransactionStats>, ConnectionWorkersSchedulerError>>,
+    watch::Sender<Option<StakeIdentity>>,
+    CancellationToken,
+) {
+    let leader_updater = setup_leader_updater(tpu_address).await;
     let cancel = CancellationToken::new();
     let (update_identity_sender, update_identity_receiver) = watch::channel(None);
     let scheduler = ConnectionWorkersScheduler::new(
@@ -835,4 +843,102 @@ async fn test_proactive_connection_close_detection() {
         stats.connection_error_application_closed > 0 || stats.write_error_connection_lost > 0,
         "Should detect connection close proactively. Stats: {stats:?}"
     );
+}
+
+#[tokio::test]
+async fn test_client_builder() {
+    let SpawnTestServerResult {
+        join_handle: server_handle,
+        receiver,
+        server_address,
+        stats: _stats,
+        cancel,
+    } = setup_quic_server(
+        None,
+        QuicStreamerConfig::default_for_tests(),
+        SwQosConfig::default(),
+    );
+
+    let _drop_guard = cancel.clone().drop_guard();
+
+    let successfully_sent = Arc::new(AtomicU64::new(0));
+
+    let leader_updater = setup_leader_updater(server_address).await;
+    let builder = ClientBuilder::with_leader_updater(leader_updater)
+        .cancel_token(cancel.child_token())
+        .bind_addr(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            unique_port_range_for_tests(1).start,
+        ))
+        .leader_send_fanout(1)
+        .identity(None)
+        .max_cache_size(1)
+        .worker_channel_size(100)
+        .report({
+            let successfully_sent = successfully_sent.clone();
+            |stats: Arc<SendTransactionStats>, cancel: CancellationToken| async move {
+                let mut interval = interval(Duration::from_millis(10));
+                cancel
+                    .run_until_cancelled(async {
+                        loop {
+                            interval.tick().await;
+                            let view = stats.read_and_reset();
+                            successfully_sent.fetch_add(view.successfully_sent, Ordering::Relaxed);
+                        }
+                    })
+                    .await;
+            }
+        });
+
+    let (tx_sender, client) = builder
+        .build::<NonblockingBroadcaster>()
+        .expect("Client should be built successfully.");
+
+    // Setup sending txs
+    let tx_size = 1;
+    let expected_num_txs: usize = 2;
+
+    let txs = vec![vec![0_u8; tx_size]; 1];
+    tx_sender
+        .send_transactions_in_batch(txs.clone())
+        .await
+        .expect("Client should accept the transaction batch");
+    tx_sender
+        .try_send_transactions_in_batch(txs.clone())
+        .expect("Client should accept the transaction batch");
+
+    // Check results
+    let now = Instant::now();
+    let mut actual_num_packets = 0;
+    while actual_num_packets < expected_num_txs {
+        {
+            let elapsed = now.elapsed();
+            assert!(
+                elapsed < TEST_MAX_TIME,
+                "Failed to send {expected_num_txs} transaction in {elapsed:?}. Only sent \
+                 {actual_num_packets}",
+            );
+        }
+
+        let Ok(packets) = receiver.try_recv() else {
+            sleep(Duration::from_millis(10)).await;
+            continue;
+        };
+
+        actual_num_packets += packets.len();
+        for p in packets.iter() {
+            assert_eq!(p.meta().size, 1);
+        }
+    }
+
+    // Stop client
+    client.shutdown().await;
+    assert_eq!(
+        successfully_sent.load(Ordering::Relaxed),
+        expected_num_txs as u64
+    );
+
+    // Stop server
+    cancel.cancel();
+    server_handle.await.unwrap();
 }

@@ -568,7 +568,7 @@ mod test {
 
         drop(sender);
         send_transaction_service.join().unwrap();
-        client.stop();
+        client.shutdown();
     }
 
     #[test]
@@ -615,7 +615,7 @@ mod test {
 
         thread::spawn(move || {
             exit.store(true, Ordering::Relaxed);
-            client.stop();
+            client.shutdown();
         });
 
         let mut option = Ok(());
@@ -913,7 +913,7 @@ mod test {
                 ..ProcessTransactionsResult::default()
             }
         );
-        client.stop();
+        client.shutdown();
     }
 
     #[test]
@@ -1254,7 +1254,7 @@ mod test {
                 ..ProcessTransactionsResult::default()
             }
         );
-        client.stop();
+        client.shutdown();
     }
 
     #[test]

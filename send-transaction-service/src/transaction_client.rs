@@ -8,25 +8,15 @@ use {
     solana_measure::measure::Measure,
     solana_quic_definitions::NotifyKeyUpdate,
     solana_tpu_client_next::{
-        connection_workers_scheduler::{
-            BindTarget, ConnectionWorkersSchedulerConfig, Fanout, StakeIdentity,
-        },
-        leader_updater::LeaderUpdater,
-        transaction_batch::TransactionBatch,
-        ConnectionWorkersScheduler,
+        connection_workers_scheduler::NonblockingBroadcaster, leader_updater::LeaderUpdater,
+        Client, ClientBuilder, SendTransactionStats, TransactionSender,
     },
     std::{
         net::{SocketAddr, UdpSocket},
         sync::{atomic::Ordering, Arc, Mutex},
         time::{Duration, Instant},
     },
-    tokio::{
-        runtime::Handle,
-        sync::{
-            mpsc::{self},
-            watch,
-        },
-    },
+    tokio::runtime::Handle,
     tokio_util::sync::CancellationToken,
 };
 
@@ -230,10 +220,8 @@ where
 #[derive(Clone)]
 pub struct TpuClientNextClient {
     runtime_handle: Handle,
-    sender: mpsc::Sender<TransactionBatch>,
-    update_certificate_sender: watch::Sender<Option<StakeIdentity>>,
-    #[cfg(any(test, feature = "dev-context-only-utils"))]
-    cancel: CancellationToken,
+    sender: TransactionSender,
+    client: Client,
 }
 
 const METRICS_REPORTING_INTERVAL: Duration = Duration::from_secs(3);
@@ -243,7 +231,7 @@ impl TpuClientNextClient {
         my_tpu_address: SocketAddr,
         tpu_peers: Option<Vec<SocketAddr>>,
         leader_info: Option<T>,
-        leader_forward_count: u64,
+        leader_forward_count: usize,
         identity: Option<&Keypair>,
         bind_socket: UdpSocket,
         cancel: CancellationToken,
@@ -251,12 +239,6 @@ impl TpuClientNextClient {
     where
         T: TpuInfoWithSendStatic + Clone,
     {
-        // The channel size represents 8s worth of transactions at a rate of
-        // 1000 tps, assuming batch size is 64.
-        let (sender, receiver) = mpsc::channel(128);
-
-        let (update_certificate_sender, update_certificate_receiver) = watch::channel(None);
-
         let leader_info_provider = CurrentLeaderInfo::new(leader_info);
         let leader_updater: SendTransactionServiceLeaderUpdater<T> =
             SendTransactionServiceLeaderUpdater {
@@ -264,63 +246,52 @@ impl TpuClientNextClient {
                 my_tpu_address,
                 tpu_peers,
             };
-        let config = Self::create_config(bind_socket, identity, leader_forward_count as usize);
 
-        let scheduler = ConnectionWorkersScheduler::new(
-            Box::new(leader_updater),
-            receiver,
-            update_certificate_receiver,
-            cancel.clone(),
-        );
-        // leaking handle to this task, as it will run until the cancel signal is received
-        runtime_handle.spawn(scheduler.get_stats().report_to_influxdb(
-            "send-transaction-service-TPU-client",
-            METRICS_REPORTING_INTERVAL,
-            cancel.clone(),
-        ));
-        let _handle = runtime_handle.spawn(scheduler.run(config));
+        let (sender, client) = ClientBuilder::with_leader_updater(Box::new(leader_updater))
+            .runtime_handle(runtime_handle.clone())
+            .bind_socket(bind_socket)
+            .identity(identity)
+            .leader_send_fanout(leader_forward_count)
+            .max_cache_size(MAX_CONNECTIONS)
+            // The channel size represents 8s worth of transactions at a rate of
+            // 1000 tps, assuming batch size is 64.
+            .sender_capacity(128)
+            .worker_channel_size(64)
+            .max_reconnect_attempts(4)
+            .metric_reporter({
+                |stats: Arc<SendTransactionStats>, cancel: CancellationToken| async move {
+                    stats
+                        .report_to_influxdb(
+                            "send-transaction-service-TPU-client",
+                            METRICS_REPORTING_INTERVAL,
+                            cancel.clone(),
+                        )
+                        .await
+                }
+            })
+            .cancel_token(cancel)
+            .build::<NonblockingBroadcaster>()
+            .expect("Client configuration should be correct.");
+
         Self {
             runtime_handle,
             sender,
-            update_certificate_sender,
-            #[cfg(any(test, feature = "dev-context-only-utils"))]
-            cancel,
-        }
-    }
-
-    fn create_config(
-        bind_socket: UdpSocket,
-        stake_identity: Option<&Keypair>,
-        leader_forward_count: usize,
-    ) -> ConnectionWorkersSchedulerConfig {
-        ConnectionWorkersSchedulerConfig {
-            bind: BindTarget::Socket(bind_socket),
-            stake_identity: stake_identity.map(StakeIdentity::new),
-            num_connections: MAX_CONNECTIONS,
-            skip_check_transaction_age: true,
-            // experimentally found parameter values
-            worker_channel_size: 64,
-            max_reconnect_attempts: 4,
-            // We open connection to one more leader in advance, which time-wise means ~1.6s
-            leaders_fanout: Fanout {
-                connect: leader_forward_count + 1,
-                send: leader_forward_count,
-            },
+            client,
         }
     }
 
     #[cfg(any(test, feature = "dev-context-only-utils"))]
-    pub fn cancel(&self) {
-        self.cancel.cancel();
+    pub fn shutdown(self) {
+        self.runtime_handle.spawn(async move {
+            self.client.shutdown().await;
+        });
     }
 }
 
 impl NotifyKeyUpdate for TpuClientNextClient {
     fn update_key(&self, identity: &Keypair) -> Result<(), Box<dyn std::error::Error>> {
-        let stake_identity = StakeIdentity::new(identity);
-        self.update_certificate_sender
-            .send(Some(stake_identity))
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        self.client.update_identity(identity)?;
+        Ok(())
     }
 }
 
@@ -334,9 +305,8 @@ impl TransactionClient for TpuClientNextClient {
         self.runtime_handle.spawn({
             let sender = self.sender.clone();
             async move {
-                let res = sender.send(TransactionBatch::new(wire_transactions)).await;
-                if res.is_err() {
-                    warn!("Failed to send transaction to channel: it is closed.");
+                if let Err(e) = sender.send_transactions_in_batch(wire_transactions).await {
+                    warn!("Failed to send transaction: {e:?}");
                 }
             }
         });

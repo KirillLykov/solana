@@ -28,12 +28,8 @@ use {
     },
     solana_streamer::sendmmsg::{batch_send, SendPktsError},
     solana_tpu_client_next::{
-        connection_workers_scheduler::{
-            BindTarget, ConnectionWorkersSchedulerConfig, Fanout, StakeIdentity,
-        },
-        leader_updater::LeaderUpdater,
-        transaction_batch::TransactionBatch,
-        ConnectionWorkersScheduler,
+        connection_workers_scheduler::NonblockingBroadcaster, leader_updater::LeaderUpdater,
+        Client, ClientBuilder, TransactionSender,
     },
     solana_transaction::sanitized::MessageHash,
     solana_transaction_error::TransportError,
@@ -43,10 +39,7 @@ use {
         thread::{Builder, JoinHandle},
         time::{Duration, Instant},
     },
-    tokio::{
-        runtime::Handle as RuntimeHandle,
-        sync::{mpsc, watch},
-    },
+    tokio::runtime::Handle as RuntimeHandle,
     tokio_util::sync::CancellationToken,
 };
 
@@ -573,8 +566,8 @@ impl LeaderUpdater for ForwardAddressGetter {
 
 #[derive(Clone)]
 struct TpuClientNextClient {
-    sender: mpsc::Sender<TransactionBatch>,
-    update_certificate_sender: watch::Sender<Option<StakeIdentity>>,
+    sender: TransactionSender,
+    client: Client,
 }
 
 const METRICS_REPORTING_INTERVAL: Duration = Duration::from_secs(3);
@@ -587,51 +580,36 @@ impl TpuClientNextClient {
         bind_socket: UdpSocket,
         cancel: CancellationToken,
     ) -> Self {
-        // For now use large channel, the more suitable size to be found later.
-        let (sender, receiver) = mpsc::channel(128);
         let leader_updater = forward_address_getter.clone();
-
-        let config = Self::create_config(bind_socket, stake_identity);
-        let (update_certificate_sender, update_certificate_receiver) = watch::channel(None);
-        let scheduler: ConnectionWorkersScheduler = ConnectionWorkersScheduler::new(
-            Box::new(leader_updater),
-            receiver,
-            update_certificate_receiver,
-            cancel.clone(),
-        );
-        // leaking handle to this task, as it will run until the cancel signal is received
-        runtime_handle.spawn(scheduler.get_stats().report_to_influxdb(
-            "forwarding-stage-tpu-client",
-            METRICS_REPORTING_INTERVAL,
-            cancel.clone(),
-        ));
-        let _handle = runtime_handle.spawn(scheduler.run(config));
-        Self {
-            sender,
-            update_certificate_sender,
-        }
-    }
-
-    fn create_config(
-        bind_socket: UdpSocket,
-        stake_identity: Option<&Keypair>,
-    ) -> ConnectionWorkersSchedulerConfig {
-        ConnectionWorkersSchedulerConfig {
-            bind: BindTarget::Socket(bind_socket),
-            stake_identity: stake_identity.map(StakeIdentity::new),
+        let (sender, client) = ClientBuilder::with_leader_updater(Box::new(leader_updater))
+            .runtime_handle(runtime_handle.clone())
+            .bind_socket(bind_socket)
+            .identity(stake_identity)
+            .leader_send_fanout(1)
             // Cache size of 128 covers all nodes above the P90 slot count threshold,
             // which together account for ~75% of total slots in the epoch.
-            num_connections: 128,
-            skip_check_transaction_age: true,
-            worker_channel_size: 2,
-            max_reconnect_attempts: 4,
-            // Send to the next leader only, but verify that connections exist
-            // for the leaders of the next `4 * NUM_CONSECUTIVE_SLOTS`.
-            leaders_fanout: Fanout {
-                send: 1,
-                connect: 4,
-            },
-        }
+            .max_cache_size(128)
+            // The channel size represents 8s worth of transactions at a rate of
+            // 1000 tps, assuming batch size is 64.
+            .sender_capacity(128)
+            .worker_channel_size(2)
+            .max_reconnect_attempts(4)
+            .metric_reporter({
+                |stats, cancel| async move {
+                    stats
+                        .report_to_influxdb(
+                            "forwarding-stage-tpu-client",
+                            METRICS_REPORTING_INTERVAL,
+                            cancel,
+                        )
+                        .await
+                }
+            })
+            .cancel_token(cancel)
+            .build::<NonblockingBroadcaster>()
+            .expect("Client configuration should be correct.");
+
+        Self { sender, client }
     }
 }
 
@@ -641,17 +619,15 @@ impl ForwardingClient for TpuClientNextClient {
         wire_transactions: Vec<Vec<u8>>,
     ) -> Result<(), ForwardingClientError> {
         self.sender
-            .try_send(TransactionBatch::new(wire_transactions))
+            .try_send_transactions_in_batch(wire_transactions)
             .map_err(|_e| ForwardingClientError::Failed)
     }
 }
 
 impl NotifyKeyUpdate for TpuClientNextClient {
     fn update_key(&self, identity: &Keypair) -> Result<(), Box<dyn std::error::Error>> {
-        let stake_identity = StakeIdentity::new(identity);
-        self.update_certificate_sender
-            .send(Some(stake_identity))
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        self.client.update_identity(identity)?;
+        Ok(())
     }
 }
 

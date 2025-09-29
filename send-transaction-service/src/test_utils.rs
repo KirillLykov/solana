@@ -65,7 +65,7 @@ impl CreateClient for TpuClientNextClient {
             my_tpu_address,
             tpu_peers,
             None,
-            leader_forward_count,
+            leader_forward_count as usize,
             None,
             bind_socket,
             CancellationToken::new(),
@@ -74,19 +74,19 @@ impl CreateClient for TpuClientNextClient {
 }
 
 pub trait Stoppable {
-    fn stop(&self);
+    fn shutdown(self);
 }
 
 impl<T> Stoppable for ConnectionCacheClient<T>
 where
     T: TpuInfoWithSendStatic,
 {
-    fn stop(&self) {}
+    fn shutdown(self) {}
 }
 
 impl Stoppable for TpuClientNextClient {
-    fn stop(&self) {
-        self.cancel();
+    fn shutdown(self) {
+        self.shutdown();
     }
 }
 

@@ -563,7 +563,7 @@ impl JsonRpcService {
                     my_tpu_address,
                     config.send_transaction_service_config.tpu_peers.clone(),
                     leader_info,
-                    config.send_transaction_service_config.leader_forward_count,
+                    config.send_transaction_service_config.leader_forward_count as usize,
                     Some(identity_keypair),
                     tpu_client_socket,
                     cancel,

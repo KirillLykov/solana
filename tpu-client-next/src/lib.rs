@@ -17,11 +17,13 @@
 //! - **`tracing`**: Enables logging using `tracing` crate instead of `log`. This feature is
 //!   mutually exclusive with `log`.
 
+pub mod client_builder;
 pub(crate) mod connection_worker;
 pub mod connection_workers_scheduler;
 pub mod send_transaction_stats;
 pub mod workers_cache;
 pub use crate::{
+    client_builder::{Client, ClientBuilder, ClientError, TransactionSender},
     connection_workers_scheduler::{ConnectionWorkersScheduler, ConnectionWorkersSchedulerError},
     send_transaction_stats::SendTransactionStats,
 };
