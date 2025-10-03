@@ -241,8 +241,9 @@ async fn test_client() {
             }
         });
 
+    let broadcaster = NonblockingBroadcaster;
     let client = builder
-        .build::<NonblockingBroadcaster>()
+        .build(broadcaster)
         .await
         .expect("Client should be built successfully.");
 

@@ -22,7 +22,7 @@ impl SendTransactionStats {
         let stats = self.clone();
         loop {
             select! {
-                    _ = interval.tick() => {
+                _ = interval.tick() => {
                     let view = stats.read_and_reset();
                     let connect_error = view.connect_error_cids_exhausted
                         + view.connect_error_other

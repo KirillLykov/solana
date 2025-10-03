@@ -145,9 +145,12 @@ impl ClientBuilder {
     /// TODO(klykov): API-wise, it is also possible to split the result into Sender (to
     /// send txs) and Client which will be background task running the
     /// scheduler. Not sure if we need this flexibility.
-    pub async fn build<Broadcaster>(self) -> Result<Client, ClientBuilderError>
+    pub async fn build<Broadcaster>(
+        self,
+        broadcaster: Broadcaster,
+    ) -> Result<Client, ClientBuilderError>
     where
-        Broadcaster: WorkersBroadcaster + 'static,
+        Broadcaster: WorkersBroadcaster + Send + 'static,
     {
         let bind = self.bind_target.ok_or(ClientBuilderError::Misconfigured)?;
         let (sender, receiver) = mpsc::channel(self.input_channel_size);
@@ -180,7 +183,7 @@ impl ClientBuilder {
             let cancel = self.cancel.clone();
             tasks.spawn(report_fn(stats, cancel));
         }
-        tasks.spawn(scheduler.run_with_broadcaster::<Broadcaster>(config));
+        tasks.spawn(scheduler.run_with_broadcaster(config, broadcaster));
         tasks.close();
         Ok(Client {
             sender,
