@@ -40,7 +40,8 @@
 use {
     crate::{
         connection_workers_scheduler::{
-            BindTarget, ConnectionWorkersSchedulerConfig, Fanout, StakeIdentity, WorkersBroadcaster,
+            BindTarget, ConnectionWorkersSchedulerConfig, Fanout, NonblockingBroadcaster,
+            StakeIdentity, WorkersBroadcaster,
         },
         leader_updater::LeaderUpdater,
         transaction_batch::TransactionBatch,
@@ -78,10 +79,12 @@ pub struct ClientBuilder {
     worker_channel_size: usize,
     max_reconnect_attempts: usize,
     report_fn: Option<ReportFn>,
+    broadcaster: Box<dyn WorkersBroadcaster + Send + Sync>,
     cancel: CancellationToken,
 }
 
 impl ClientBuilder {
+    // TODO move leader_updater
     pub fn with_leader_updater(leader_updater: Box<dyn LeaderUpdater>) -> Self {
         Self {
             leader_updater,
@@ -94,6 +97,7 @@ impl ClientBuilder {
             input_channel_size: 64,
             max_reconnect_attempts: 2,
             report_fn: None,
+            broadcaster: Box::new(NonblockingBroadcaster),
             cancel: CancellationToken::new(),
         }
     }
@@ -142,16 +146,15 @@ impl ClientBuilder {
         self
     }
 
+    pub fn broadcaster(mut self, broadcaster: Box<dyn WorkersBroadcaster + Send + Sync>) -> Self {
+        self.broadcaster = broadcaster;
+        self
+    }
+
     /// TODO(klykov): API-wise, it is also possible to split the result into Sender (to
     /// send txs) and Client which will be background task running the
     /// scheduler. Not sure if we need this flexibility.
-    pub async fn build<Broadcaster>(
-        self,
-        broadcaster: Broadcaster,
-    ) -> Result<Client, ClientBuilderError>
-    where
-        Broadcaster: WorkersBroadcaster + Send + 'static,
-    {
+    pub async fn build(self) -> Result<Client, ClientBuilderError> {
         let bind = self.bind_target.ok_or(ClientBuilderError::Misconfigured)?;
         let (sender, receiver) = mpsc::channel(self.input_channel_size);
 
@@ -183,7 +186,7 @@ impl ClientBuilder {
             let cancel = self.cancel.clone();
             tasks.spawn(report_fn(stats, cancel));
         }
-        tasks.spawn(scheduler.run_with_broadcaster(config, broadcaster));
+        tasks.spawn(scheduler.run_with_broadcaster(config, &*self.broadcaster));
         tasks.close();
         Ok(Client {
             sender,
