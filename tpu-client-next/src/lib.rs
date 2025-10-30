@@ -37,3 +37,5 @@ pub mod metrics;
 pub(crate) mod logging;
 pub mod node_address_service;
 pub mod tpu_client_next;
+#[cfg(feature = "websocket-node-address-service")]
+pub mod websocket_node_address_service;
