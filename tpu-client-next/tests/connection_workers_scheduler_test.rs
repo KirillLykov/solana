@@ -22,6 +22,7 @@ use {
         quic::QuicStreamerConfig,
         streamer::StakedNodes,
     },
+    solana_tpu_client_next::leader_updater::LeaderUpdater,
     solana_tpu_client_next::{
         connection_workers_scheduler::{
             BindTarget, ConnectionWorkersSchedulerConfig, Fanout, NonblockingBroadcaster,
@@ -204,6 +205,22 @@ fn spawn_tx_sender(
     }
 }
 
+async fn setup_leader_updater(tpu_address: SocketAddr) -> Box<dyn LeaderUpdater> {
+    let json_rpc_url = "http://127.0.0.1:8899";
+    let (_, websocket_url) = ConfigInput::compute_websocket_url_setting("", "", json_rpc_url, "");
+
+    let rpc_client = Arc::new(RpcClient::new_with_commitment(
+        json_rpc_url.to_string(),
+        CommitmentConfig::confirmed(),
+    ));
+
+    // Setup sending txs
+    #[allow(deprecated)]
+    create_leader_updater(rpc_client, websocket_url, Some(tpu_address))
+        .await
+        .expect("Leader updates was successfully created")
+}
+
 #[tokio::test]
 async fn test_client() {
     let SpawnTestServerResult {
@@ -212,7 +229,11 @@ async fn test_client() {
         server_address,
         stats: _stats,
         cancel,
-    } = setup_quic_server(None, QuicServerParams::default_for_tests());
+    } = setup_quic_server(
+        None,
+        QuicStreamerConfig::default_for_tests(),
+        SwQosConfig::default(),
+    );
 
     let _drop_guard = cancel.clone().drop_guard();
 

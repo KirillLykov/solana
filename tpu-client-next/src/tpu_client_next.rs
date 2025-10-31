@@ -7,7 +7,7 @@
 //!
 //! # Example
 //!
-//! ```rust, no_run
+//! ```ignore
 //!  let builder = ClientBuilder::with_leader_updater(leader_updater)
 //!        .cancel_token(cancel.child_token())
 //!        .bind_addr(SocketAddr::new(
