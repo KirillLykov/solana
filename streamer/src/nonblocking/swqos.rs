@@ -9,8 +9,8 @@ use {
                 CONNECTION_CLOSE_REASON_DISALLOWED,
             },
             stream_throttle::{
-                throttle_stream, ConnectionStreamCounter, StakedStreamLoadEMA,
-                STREAM_THROTTLING_INTERVAL_MS,
+                refill_task, throttle_stream, ConnectionStreamCounter, StakedStreamLoadEMA,
+                StreamQuotas, REFILL_INTERVAL, STREAM_THROTTLING_INTERVAL_MS,
             },
         },
         quic::{StreamerStats, DEFAULT_MAX_STREAMS_PER_MS},
@@ -26,7 +26,10 @@ use {
             Arc, RwLock,
         },
     },
-    tokio::sync::{Mutex, MutexGuard},
+    tokio::{
+        sync::{Mutex, MutexGuard},
+        time::sleep,
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -80,6 +83,7 @@ pub struct SwQos {
     staked_nodes: Arc<RwLock<StakedNodes>>,
     unstaked_connection_table: Arc<Mutex<ConnectionTable>>,
     staked_connection_table: Arc<Mutex<ConnectionTable>>,
+    test_stream_quotas: Arc<StreamQuotas>,
 }
 
 // QoS Params for Stake weighted QoS
@@ -93,6 +97,7 @@ pub struct SwQosConnectionContext {
     last_update: Arc<AtomicU64>,
     remote_address: std::net::SocketAddr,
     stream_counter: Option<Arc<ConnectionStreamCounter>>,
+    quota_index: usize,
 }
 
 impl ConnectionContext for SwQosConnectionContext {
@@ -115,6 +120,12 @@ impl SwQos {
         staked_nodes: Arc<RwLock<StakedNodes>>,
         cancel: CancellationToken,
     ) -> Self {
+        let test_stream_quotas = {
+            let guard = staked_nodes.read().unwrap();
+            let test_stream_quotas = Arc::new(StreamQuotas::new(&guard.overrides));
+            tokio::spawn(refill_task(test_stream_quotas.clone()));
+            test_stream_quotas
+        };
         Self {
             max_staked_connections,
             max_unstaked_connections,
@@ -134,11 +145,10 @@ impl SwQos {
                 ConnectionTableType::Staked,
                 cancel,
             ))),
+            test_stream_quotas,
         }
     }
-}
 
-impl SwQos {
     fn cache_new_connection(
         &self,
         client_connection_tracker: ClientConnectionTracker,
@@ -256,10 +266,12 @@ impl QosController<SwQosConnectionContext> for SwQos {
                 remote_address: connection.remote_address(),
                 stream_counter: None,
                 last_update: Arc::new(AtomicU64::new(timing::timestamp())),
+                quota_index: 0, //FIXME
             },
             |(pubkey, stake, total_stake, max_stake)| {
                 // The heuristic is that the stake should be large enough to have 1 stream pass through within one throttle
                 // interval during which we allow max (MAX_STREAMS_PER_MS * STREAM_THROTTLING_INTERVAL_MS) streams.
+                let index = self.test_stream_quotas.mapping[&pubkey];
 
                 let peer_type = {
                     let max_streams_per_ms = self.staked_stream_load_ema.max_streams_per_ms();
@@ -283,6 +295,7 @@ impl QosController<SwQosConnectionContext> for SwQos {
                     remote_address: connection.remote_address(),
                     last_update: Arc::new(AtomicU64::new(timing::timestamp())),
                     stream_counter: None,
+                    quota_index: index,
                 }
             },
         )
@@ -450,7 +463,6 @@ impl QosController<SwQosConnectionContext> for SwQos {
 
             let max_streams_per_throttling_interval =
                 self.max_streams_per_throttling_interval(context);
-
             throttle_stream(
                 &self.stats,
                 peer_type,
@@ -459,6 +471,8 @@ impl QosController<SwQosConnectionContext> for SwQos {
                 max_streams_per_throttling_interval,
             )
             .await;
+            let entry = &self.test_stream_quotas.entries[context.quota_index];
+            entry.wait_for_token().await;
         }
     }
 
