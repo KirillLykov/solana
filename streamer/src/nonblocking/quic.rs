@@ -1259,12 +1259,15 @@ impl Future for EndpointAccept<'_> {
 pub mod test {
     use {
         super::*,
-        crate::nonblocking::{
-            swqos::SwQosConfig,
-            testing_utilities::{
-                check_multiple_streams, get_client_config, make_client_endpoint, setup_quic_server,
-                spawn_stake_weighted_qos_server, SpawnTestServerResult,
+        crate::{
+            nonblocking::{
+                swqos::SwQosConfig,
+                testing_utilities::{
+                    check_multiple_streams, get_client_config, make_client_endpoint,
+                    setup_quic_server, spawn_stake_weighted_qos_server, SpawnTestServerResult,
+                },
             },
+            streamer::VersionedStakedNodes,
         },
         assert_matches::assert_matches,
         crossbeam_channel::{unbounded, Receiver},
@@ -1272,7 +1275,7 @@ pub mod test {
         solana_keypair::Keypair,
         solana_net_utils::sockets::bind_to_localhost_unique,
         solana_signer::Signer,
-        std::collections::HashMap,
+        std::{collections::HashMap, sync::atomic::AtomicUsize},
         tokio::time::sleep,
     };
 
@@ -1760,6 +1763,10 @@ pub mod test {
         let keypair = Keypair::new();
         let server_address = s.local_addr().unwrap();
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
+        let staked_nodes = VersionedStakedNodes {
+            staked_nodes,
+            version: Arc::new(AtomicUsize::new(0)),
+        };
         let cancel = CancellationToken::new();
         let SpawnNonBlockingServerResult {
             endpoints: _,
@@ -1793,7 +1800,10 @@ pub mod test {
         let (sender, receiver) = unbounded();
         let keypair = Keypair::new();
         let server_address = s.local_addr().unwrap();
-        let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
+        let staked_nodes = VersionedStakedNodes {
+            staked_nodes: Arc::new(RwLock::new(StakedNodes::default())),
+            version: Arc::new(AtomicUsize::new(0)),
+        };
         let cancel = CancellationToken::new();
         let SpawnNonBlockingServerResult {
             endpoints: _,

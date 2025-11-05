@@ -801,7 +801,7 @@ mod test {
 
     fn setup_simple_qos_quic_server(
         server_params: SimpleQosQuicStreamerConfig,
-        staked_nodes: Arc<RwLock<StakedNodes>>,
+        staked_nodes: VersionedStakedNodes,
     ) -> (
         std::thread::JoinHandle<()>,
         crossbeam_channel::Receiver<PacketBatch>,
@@ -838,7 +838,10 @@ mod test {
         SocketAddr,
         CancellationToken,
     ) {
-        let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
+        let staked_nodes = VersionedStakedNodes {
+            staked_nodes: Arc::new(RwLock::new(StakedNodes::default())),
+            version: Arc::new(AtomicUsize::new(0)),
+        };
 
         let server_params = QuicStreamerConfig::default_for_tests();
         let s = bind_to_localhost_unique().expect("should bind");
@@ -900,7 +903,10 @@ mod test {
         let (sender, receiver) = unbounded();
         let keypair = Keypair::new();
         let server_address = s.local_addr().unwrap();
-        let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
+        let staked_nodes = VersionedStakedNodes {
+            staked_nodes: Arc::new(RwLock::new(StakedNodes::default())),
+            version: Arc::new(AtomicUsize::new(0)),
+        };
         let cancel = CancellationToken::new();
         let SpawnServerResult {
             endpoints: _,
@@ -968,8 +974,12 @@ mod test {
             quic_streamer_config: server_params,
             qos_config,
         };
+        let staked_nodes = VersionedStakedNodes {
+            staked_nodes: Arc::new(RwLock::new(staked_nodes)),
+            version: Arc::new(AtomicUsize::new(0)),
+        };
         let (t, receiver, server_address, cancel) =
-            setup_simple_qos_quic_server(server_params, Arc::new(RwLock::new(staked_nodes)));
+            setup_simple_qos_quic_server(server_params, staked_nodes);
 
         let runtime = rt_for_test();
         let num_expected_packets = 20;
@@ -991,7 +1001,10 @@ mod test {
         let (sender, _) = unbounded();
         let keypair = Keypair::new();
         let server_address = s.local_addr().unwrap();
-        let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
+        let staked_nodes = VersionedStakedNodes {
+            staked_nodes: Arc::new(RwLock::new(StakedNodes::default())),
+            version: Arc::new(AtomicUsize::new(0)),
+        };
         let cancel = CancellationToken::new();
         let SpawnServerResult {
             endpoints: _,
