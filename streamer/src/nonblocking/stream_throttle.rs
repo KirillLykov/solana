@@ -1,5 +1,5 @@
 use {
-    crate::{nonblocking::quic::ConnectionPeerType, quic::StreamerStats},
+    crate::{nonblocking::quic::ConnectionPeerType, quic::StreamerStats, streamer::StakedNodes},
     percentage::Percentage,
     solana_pubkey::Pubkey,
     std::{
@@ -22,9 +22,10 @@ const STREAM_LOAD_EMA_INTERVAL_MS: u64 = 5;
 const STREAM_LOAD_EMA_INTERVAL_COUNT: u64 = 10;
 const EMA_WINDOW_MS: u64 = STREAM_LOAD_EMA_INTERVAL_MS * STREAM_LOAD_EMA_INTERVAL_COUNT;
 
+#[derive(Clone)]
 pub struct StreamQuotas {
     pub mapping: HashMap<Pubkey, usize>,
-    pub entries: Vec<QuotaEntry>,
+    pub entries: Vec<Arc<QuotaEntry>>,
     pub total_stake: u64,
 }
 
@@ -85,7 +86,7 @@ impl QuotaEntry {
         }
     }
 
-    fn try_refill(&self, refill_amount: u64, my_max_tokens: u64) -> u64 {
+    pub fn try_refill(&self, refill_amount: u64, my_max_tokens: u64) -> u64 {
         // TODO optimize
         let current = self.tokens.load(Ordering::Relaxed);
         // this is technically a race, but since the other threads can only
@@ -105,12 +106,18 @@ impl QuotaEntry {
 }
 
 impl StreamQuotas {
-    pub fn new(stakes: &HashMap<Pubkey, u64>) -> Self {
-        let mut mapping = HashMap::with_capacity(stakes.len());
-        let mut entries = Vec::with_capacity(stakes.len());
+    pub fn new(stakes: &StakedNodes) -> Self {
+        let overrides = &stakes.overrides;
+        let total_len = overrides.len() + stakes.stakes.len();
+        let mut mapping = HashMap::with_capacity(total_len);
+        let mut entries = Vec::with_capacity(total_len);
         let mut total_stake = 0;
-        for (&address, &stake) in stakes.iter() {
-            entries.push(QuotaEntry::new(address, stake));
+        for (&address, &stake) in overrides.iter() {
+            entries.push(Arc::new(QuotaEntry::new(address, stake)));
+            total_stake += stake;
+        }
+        for (&address, &stake) in stakes.stakes.iter() {
+            entries.push(Arc::new(QuotaEntry::new(address, stake)));
             total_stake += stake;
         }
         entries.sort();
