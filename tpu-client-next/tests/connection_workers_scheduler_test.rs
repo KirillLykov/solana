@@ -5,6 +5,7 @@ use {
     solana_commitment_config::CommitmentConfig,
     solana_keypair::Keypair,
     solana_net_utils::sockets::unique_port_range_for_tests,
+    solana_net_utils::sockets::{bind_to, localhost_port_range_for_tests},
     solana_pubkey::Pubkey,
     solana_rpc_client::nonblocking::rpc_client::RpcClient,
     solana_signer::Signer,
@@ -30,7 +31,7 @@ use {
     },
     std::{
         collections::HashMap,
-        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
         num::Saturating,
         sync::{
             atomic::{AtomicU64, Ordering},
@@ -863,11 +864,9 @@ async fn test_client_builder() {
 
     let successfully_sent = Arc::new(AtomicU64::new(0));
 
-    let bind_addr = SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        unique_port_range_for_tests(1).start,
-    );
-    let socket = UdpSocket::bind(bind_addr).unwrap();
+    let port_range = localhost_port_range_for_tests();
+    let socket = bind_to(IpAddr::V4(Ipv4Addr::LOCALHOST), port_range.0)
+        .expect("Should be able to open UdpSocket for tests.");
 
     let leader_updater = setup_leader_updater(server_address).await;
     let builder = ClientBuilder::with_leader_updater(leader_updater)

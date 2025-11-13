@@ -673,7 +673,7 @@ impl JsonRpcService {
     fn new_with_client<
         Client: TransactionClient
             + NotifyKeyUpdate
-            + Clone
+            //+ Clone
             + std::marker::Send
             + std::marker::Sync
             + 'static,

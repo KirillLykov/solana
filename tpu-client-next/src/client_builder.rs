@@ -305,7 +305,6 @@ pub enum ClientBuilderError {
     Misconfigured,
 }
 
-//TODO(klykov): renname to Error
 /// Represents [`Client`] errors.
 #[derive(Debug, Error)]
 pub enum ClientError {

@@ -217,11 +217,15 @@ where
 /// * Update the validator identity keypair and propagate the changes to the
 ///   scheduler. Most of the complexity of this structure arises from this
 ///   functionality.
-#[derive(Clone)]
+//#[derive(Clone)]
 pub struct TpuClientNextClient {
     runtime_handle: Handle,
-    sender: TransactionSender,
     client: Client,
+}
+
+pub struct TpuClientNextSender {
+    runtime_handle: Handle,
+    sender: TransactionSender,
 }
 
 const METRICS_REPORTING_INTERVAL: Duration = Duration::from_secs(3);
@@ -235,7 +239,7 @@ impl TpuClientNextClient {
         identity: Option<&Keypair>,
         bind_socket: UdpSocket,
         cancel: CancellationToken,
-    ) -> Self
+    ) -> (Self, TpuClientNextSender)
     where
         T: TpuInfoWithSendStatic + Clone,
     {
@@ -273,11 +277,16 @@ impl TpuClientNextClient {
             .build::<NonblockingBroadcaster>()
             .expect("Client configuration should be correct.");
 
-        Self {
-            runtime_handle,
-            sender,
-            client,
-        }
+        (
+            Self {
+                runtime_handle: runtime_handle.clone(),
+                client,
+            },
+            TpuClientNextSender {
+                runtime_handle,
+                sender,
+            },
+        )
     }
 
     #[cfg(any(test, feature = "dev-context-only-utils"))]
@@ -295,7 +304,7 @@ impl NotifyKeyUpdate for TpuClientNextClient {
     }
 }
 
-impl TransactionClient for TpuClientNextClient {
+impl TransactionClient for TpuClientNextSender {
     fn send_transactions_in_batch(
         &self,
         wire_transactions: Vec<Vec<u8>>,
