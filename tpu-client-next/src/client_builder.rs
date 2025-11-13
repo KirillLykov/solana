@@ -1,13 +1,12 @@
-//! This module provides a [`ClientBuilder`] along with related
-//! [`TransactionSender`] and [`Client`] structures.
+//! This module provides a [`ClientBuilder`] along with related [`TransactionSender`] and [`Client`]
+//! structures.
 //!
-//! Running TPU client requires the caller to establish connections to TPU
-//! nodes. To avoid recreating these connections every leader window, it is
-//! desirable to cache them and orchestrate their usage which is implemented in
-//! [`ConnectionWorkersScheduler`]. [`ClientBuilder`] hides the complexify of
-//! creating scheduler and provides a simple but configurable way to create
-//! [`TransactionSender`] and [`Client`]. [`TransactionSender`] is used to send
-//! transactions in batches while [`Client`] runs the background tasks.
+//! Running TPU client requires the caller to establish connections to TPU nodes. To avoid
+//! recreating these connections every leader window, it is desirable to cache them and orchestrate
+//! their usage which is implemented in [`ConnectionWorkersScheduler`]. [`ClientBuilder`] hides the
+//! complexify of creating scheduler and provides a simple but configurable way to create
+//! [`TransactionSender`] and [`Client`]. [`TransactionSender`] is used to send transactions in
+//! batches while [`Client`] runs the background tasks.
 //!
 //! # Example
 //!
@@ -48,7 +47,7 @@ use {
         },
         leader_updater::LeaderUpdater,
         transaction_batch::TransactionBatch,
-        ConnectionWorkersScheduler, SendTransactionStats,
+        ConnectionWorkersScheduler, ConnectionWorkersSchedulerError, SendTransactionStats,
     },
     solana_keypair::Keypair,
     std::{future::Future, net::UdpSocket, pin::Pin, sync::Arc},
@@ -56,8 +55,9 @@ use {
     tokio::{
         runtime,
         sync::{mpsc, watch},
+        task::{JoinError, JoinHandle},
     },
-    tokio_util::{sync::CancellationToken, task::TaskTracker},
+    tokio_util::sync::CancellationToken,
 };
 
 /// [`TransactionSender`] provides an interface to send transactions in batches.
@@ -66,17 +66,16 @@ pub struct TransactionSender {
     sender: mpsc::Sender<TransactionBatch>,
 }
 
-/// [`Client`] runs the background tasks required for sending transactions and
-/// update certificate used the endpoint.
-#[derive(Clone)]
+/// [`Client`] runs the background tasks required for sending transactions and update certificate
+/// used the endpoint.
 pub struct Client {
     update_certificate_sender: watch::Sender<Option<StakeIdentity>>,
-    tasks: TaskTracker,
-    cancel: CancellationToken,
+    scheduler_handle:
+        CancellableHandle<Result<Arc<SendTransactionStats>, ConnectionWorkersSchedulerError>>,
+    reporter_handle: Option<CancellableHandle<()>>,
 }
 
-/// [`ClientBuilder`] is a builder structure to create [`TransactionSender`]
-/// along with [`Client`].
+/// [`ClientBuilder`] is a builder structure to create [`TransactionSender`] along with [`Client`].
 pub struct ClientBuilder {
     runtime_handle: Option<runtime::Handle>,
     leader_updater: Box<dyn LeaderUpdater>,
@@ -89,7 +88,8 @@ pub struct ClientBuilder {
     worker_channel_size: usize,
     max_reconnect_attempts: usize,
     report_fn: Option<ReportFn>,
-    cancel: CancellationToken,
+    cancel_scheduler: CancellationToken,
+    cancel_reporter: CancellationToken,
 }
 
 impl ClientBuilder {
@@ -106,16 +106,15 @@ impl ClientBuilder {
             sender_capacity: 64,
             max_reconnect_attempts: 2,
             report_fn: None,
-            cancel: CancellationToken::new(),
+            cancel_scheduler: CancellationToken::new(),
+            cancel_reporter: CancellationToken::new(),
         }
     }
 
-    /// Set the runtime handle for the client. If not set, the current runtime
-    /// will be used.
+    /// Set the runtime handle for the client. If not set, the current runtime will be used.
     ///
-    /// Note that if the runtime handle is not set, the caller must ensure that
-    /// the `build` is called in tokio runtime context. Otherwise, `build` will
-    /// panic.
+    /// Note that if the runtime handle is not set, the caller must ensure that the `build` is
+    /// called in tokio runtime context. Otherwise, `build` will panic.
     pub fn runtime_handle(mut self, handle: runtime::Handle) -> Self {
         self.runtime_handle = Some(handle);
         self
@@ -146,8 +145,14 @@ impl ClientBuilder {
     }
 
     /// Set the cancellation token for the client.
+    ///
+    /// This token is used to create child tokens for the scheduler and reporter tasks. It is useful
+    /// if user wants to immediately cancel all internal tasks, otherwise calling `Client::shutdown`
+    /// is prefered way because it ensures orderly shutdown of internal tasks, see
+    /// `Client::shutdown` for details.
     pub fn cancel_token(mut self, cancel: CancellationToken) -> Self {
-        self.cancel = cancel;
+        self.cancel_scheduler = cancel.child_token();
+        self.cancel_reporter = cancel.child_token();
         self
     }
 
@@ -179,8 +184,7 @@ impl ClientBuilder {
         self
     }
 
-    /// Build the [`TransactionSender`] and [`Client`] using the provided
-    /// configuration.
+    /// Build the [`TransactionSender`] and [`Client`] using the provided configuration.
     pub fn build<Broadcaster>(self) -> Result<(TransactionSender, Client), ClientBuilderError>
     where
         Broadcaster: WorkersBroadcaster + 'static,
@@ -208,26 +212,28 @@ impl ClientBuilder {
             self.leader_updater,
             receiver,
             update_certificate_receiver,
-            self.cancel.clone(),
+            self.cancel_scheduler.clone(),
         );
         let runtime_handle = self
             .runtime_handle
             .unwrap_or_else(tokio::runtime::Handle::current);
-        let tasks = TaskTracker::new();
-        if let Some(report_fn) = self.report_fn {
+        let reporter_handle = if let Some(report_fn) = self.report_fn {
             let stats = scheduler.get_stats();
-            let cancel = self.cancel.clone();
-            tasks.spawn_on(report_fn(stats, cancel), &runtime_handle);
-        }
-        tasks.spawn_on(
-            scheduler.run_with_broadcaster::<Broadcaster>(config),
-            &runtime_handle,
-        );
-        tasks.close();
+            let cancel = self.cancel_reporter.clone();
+            let handle = runtime_handle.spawn(report_fn(stats, self.cancel_reporter));
+            Some(CancellableHandle { handle, cancel })
+        } else {
+            None
+        };
+        let scheduler_handle =
+            runtime_handle.spawn(scheduler.run_with_broadcaster::<Broadcaster>(config));
         let client = Client {
             update_certificate_sender,
-            tasks,
-            cancel: self.cancel,
+            scheduler_handle: CancellableHandle {
+                handle: scheduler_handle,
+                cancel: self.cancel_scheduler,
+            },
+            reporter_handle,
         };
         Ok((TransactionSender { sender }, client))
     }
@@ -277,10 +283,17 @@ impl Client {
             .map_err(|_| ClientError::FailedToUpdateIdentity)
     }
 
-    pub async fn shutdown(self) {
-        self.cancel.cancel();
+    /// When the `Client::shutdown` is called, only child tokens are cancelled. If user, instead,
+    /// calls cancel on the provided token directly, the order of internal tasks shutdown is not
+    /// guaranteed, which means that it might happen that some metrics are not reported. This might
+    /// metter for the test code.
+    pub async fn shutdown(self) -> Result<(), ClientError> {
+        self.scheduler_handle.shutdown().await??;
+        if let Some(reporter_handle) = self.reporter_handle {
+            reporter_handle.shutdown().await?;
+        }
         drop(self.update_certificate_sender);
-        self.tasks.wait().await;
+        Ok(())
     }
 }
 
@@ -292,6 +305,7 @@ pub enum ClientBuilderError {
     Misconfigured,
 }
 
+//TODO(klykov): renname to Error
 /// Represents [`Client`] errors.
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -299,8 +313,27 @@ pub enum ClientError {
     FailedToUpdateIdentity,
 
     #[error(transparent)]
+    JoinError(#[from] JoinError),
+
+    #[error(transparent)]
+    ConnectionWorkersSchedulerError(#[from] ConnectionWorkersSchedulerError),
+
+    #[error(transparent)]
     SendError(#[from] mpsc::error::SendError<TransactionBatch>),
 
     #[error(transparent)]
     TrySendError(#[from] mpsc::error::TrySendError<TransactionBatch>),
+}
+
+/// Helper structure for graceful shutdown of spawned tasks.
+struct CancellableHandle<T> {
+    handle: JoinHandle<T>,
+    cancel: CancellationToken,
+}
+
+impl<T> CancellableHandle<T> {
+    pub async fn shutdown(self) -> Result<T, JoinError> {
+        self.cancel.cancel();
+        self.handle.await
+    }
 }

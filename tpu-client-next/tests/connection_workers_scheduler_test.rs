@@ -30,7 +30,7 @@ use {
     },
     std::{
         collections::HashMap,
-        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
         num::Saturating,
         sync::{
             atomic::{AtomicU64, Ordering},
@@ -863,18 +863,21 @@ async fn test_client_builder() {
 
     let successfully_sent = Arc::new(AtomicU64::new(0));
 
+    let bind_addr = SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        unique_port_range_for_tests(1).start,
+    );
+    let socket = UdpSocket::bind(bind_addr).unwrap();
+
     let leader_updater = setup_leader_updater(server_address).await;
     let builder = ClientBuilder::with_leader_updater(leader_updater)
         .cancel_token(cancel.child_token())
-        .bind_addr(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            unique_port_range_for_tests(1).start,
-        ))
+        .bind_socket(socket)
         .leader_send_fanout(1)
         .identity(None)
         .max_cache_size(1)
         .worker_channel_size(100)
-        .report({
+        .metric_reporter({
             let successfully_sent = successfully_sent.clone();
             |stats: Arc<SendTransactionStats>, cancel: CancellationToken| async move {
                 let mut interval = interval(Duration::from_millis(10));
@@ -932,10 +935,13 @@ async fn test_client_builder() {
     }
 
     // Stop client
-    client.shutdown().await;
+    client
+        .shutdown()
+        .await
+        .expect("Client should shutdown successfully.");
     assert_eq!(
         successfully_sent.load(Ordering::Relaxed),
-        expected_num_txs as u64
+        expected_num_txs as u64,
     );
 
     // Stop server
