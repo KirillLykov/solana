@@ -45,7 +45,7 @@ solana-loader-v3-interface = { workspace = true, features = ["serde"] }
 solana-packet = { workspace = true }
 solana-program-runtime = { workspace = true }
 solana-pubkey = { workspace = true }
-solana-sbpf = { workspace = true, features = ["jit"] }
+solana-sbpf = { workspace = true, features = ["jit", "jit-enable-host-stack-frames"] }
 solana-sdk-ids = { workspace = true }
 solana-svm-feature-set = { workspace = true }
 solana-svm-log-collector = { workspace = true }

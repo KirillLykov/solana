@@ -86,7 +86,7 @@ solana-rent = { workspace = true, features = ["wincode"] }
 solana-rpc-client = { workspace = true, features = ["default"] }
 solana-rpc-client-api = { workspace = true }
 solana-rpc-client-nonce-utils = { workspace = true, features = ["clap"] }
-solana-sbpf = { workspace = true, features = ["jit"] }
+solana-sbpf = { workspace = true, features = ["jit", "jit-enable-host-stack-frames"] }
 solana-sdk-ids = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }

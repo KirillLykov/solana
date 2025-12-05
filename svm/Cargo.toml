@@ -142,7 +142,7 @@ solana-program-binaries = { path = "../program-binaries", features = ["agave-uns
 solana-program-runtime = { path = "../program-runtime", features = ["agave-unstable-api", "dev-context-only-utils"] }
 solana-pubkey = { workspace = true, features = ["rand"] }
 solana-rent = { workspace = true }
-solana-sbpf = { workspace = true, features = ["jit"] }
+solana-sbpf = { workspace = true, features = ["jit", "jit-enable-host-stack-frames"] }
 solana-signature = { workspace = true, features = ["rand"] }
 solana-signer = { workspace = true }
 solana-svm = { path = ".", features = ["agave-unstable-api", "dev-context-only-utils", "svm-internal"] }
