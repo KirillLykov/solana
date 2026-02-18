@@ -376,6 +376,7 @@ dependencies = [
  "agave-logger",
  "agave-snapshots",
  "agave-votor",
+ "agave-xdphelpers",
  "assert_cmd",
  "caps",
  "chrono",
@@ -469,6 +470,7 @@ dependencies = [
  "agave-logger",
  "agave-votor",
  "agave-votor-messages",
+ "agave-xdphelpers",
  "anyhow",
  "bincode",
  "bitvec",
@@ -587,6 +589,22 @@ version = "4.0.0-alpha.0"
 dependencies = [
  "aya",
  "aya-ebpf",
+]
+
+[[package]]
+name = "agave-xdphelpers"
+version = "4.0.0-alpha.0"
+dependencies = [
+ "agave-xdp",
+ "arc-swap",
+ "aya",
+ "bytes",
+ "caps",
+ "core_affinity",
+ "crossbeam-channel",
+ "log",
+ "quinn",
+ "tokio",
 ]
 
 [[package]]
@@ -8045,6 +8063,7 @@ dependencies = [
  "agave-transaction-view",
  "agave-votor",
  "agave-votor-messages",
+ "agave-xdphelpers",
  "ahash 0.8.12",
  "anyhow",
  "arc-swap",
@@ -9206,6 +9225,7 @@ dependencies = [
  "agave-snapshots",
  "agave-votor",
  "agave-votor-messages",
+ "agave-xdphelpers",
  "assert_matches",
  "bincode",
  "crossbeam-channel",
@@ -9876,6 +9896,7 @@ name = "solana-quic-client"
 version = "4.0.0-alpha.0"
 dependencies = [
  "agave-logger",
+ "agave-xdphelpers",
  "async-lock",
  "async-trait",
  "crossbeam-channel",
@@ -10830,6 +10851,7 @@ name = "solana-streamer"
 version = "4.0.0-alpha.0"
 dependencies = [
  "agave-logger",
+ "agave-xdphelpers",
  "anyhow",
  "arc-swap",
  "assert_matches",
@@ -11607,6 +11629,7 @@ dependencies = [
  "agave-votor",
  "agave-votor-messages",
  "agave-xdp",
+ "agave-xdphelpers",
  "arc-swap",
  "assert_matches",
  "aya",
