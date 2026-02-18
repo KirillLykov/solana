@@ -9,10 +9,11 @@ use {
         quic::{QuicServerError, QuicStreamerConfig, StreamerStats, QUIC_MAX_TIMEOUT},
         streamer::StakedNodes,
     },
+    agave_xdphelpers::quic_xdp_socket::QuicSocket,
     crossbeam_channel::{unbounded, Receiver, Sender},
     quinn::{
-        crypto::rustls::QuicClientConfig, AsyncUdpSocket, ClientConfig, Connection, EndpointConfig,
-        IdleTimeout, TokioRuntime, TransportConfig,
+        crypto::rustls::QuicClientConfig, ClientConfig, Connection, EndpointConfig, IdleTimeout,
+        TokioRuntime, TransportConfig,
     },
     solana_keypair::Keypair,
     solana_net_utils::sockets::{
@@ -38,7 +39,7 @@ const QUIC_KEEP_ALIVE_FOR_TESTS: Duration = Duration::from_secs(5);
 /// Spawn a streamer instance in the current tokio runtime.
 pub fn spawn_stake_weighted_qos_server(
     name: &'static str,
-    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
+    sockets: Vec<QuicSocket>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     staked_nodes: Arc<RwLock<StakedNodes>>,
@@ -99,7 +100,7 @@ pub struct SpawnTestServerResult {
     pub cancel: CancellationToken,
 }
 
-pub fn create_quic_server_sockets() -> Vec<Arc<dyn AsyncUdpSocket>> {
+pub fn create_quic_server_sockets() -> Vec<QuicSocket> {
     let num = if cfg!(not(target_os = "windows")) {
         10
     } else {
@@ -115,7 +116,7 @@ pub fn create_quic_server_sockets() -> Vec<Arc<dyn AsyncUdpSocket>> {
     .expect("bind operation for quic server sockets should succeed")
     .1
     .into_iter()
-    .map(|sock| Arc::new(UdpSocket::new(sock).unwrap()) as Arc<dyn AsyncUdpSocket>)
+    .map(|socket| QuicSocket::new(socket, None))
     .collect()
 }
 

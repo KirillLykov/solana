@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use {
+        agave_xdphelpers::quic_xdp_socket::QuicSocket,
         crossbeam_channel::{unbounded, Receiver},
         log::*,
         solana_connection_cache::{
@@ -77,7 +78,7 @@ mod tests {
         } = solana_streamer::quic::spawn_stake_wighted_qos_server(
             "solQuicTest",
             "quic_streamer_test",
-            vec![s.try_clone().unwrap()],
+            vec![QuicSocket::new(s.try_clone().unwrap(), None)],
             &keypair,
             sender,
             staked_nodes,
@@ -158,7 +159,7 @@ mod tests {
             max_concurrent_connections: _,
         } = solana_streamer::nonblocking::testing_utilities::spawn_stake_weighted_qos_server(
             "quic_streamer_test",
-            vec![s.try_clone().unwrap()],
+            vec![QuicSocket::new(s.try_clone().unwrap(), None)],
             &keypair,
             sender,
             staked_nodes,
@@ -217,7 +218,10 @@ mod tests {
         } = solana_streamer::quic::spawn_stake_wighted_qos_server(
             "solQuicTest",
             "quic_streamer_test",
-            [request_recv_socket.try_clone().unwrap()],
+            vec![QuicSocket::new(
+                request_recv_socket.try_clone().unwrap(),
+                None,
+            )],
             &keypair,
             sender,
             staked_nodes.clone(),
@@ -242,7 +246,10 @@ mod tests {
         } = solana_streamer::quic::spawn_stake_wighted_qos_server(
             "solQuicTest",
             "quic_streamer_test",
-            [response_recv_socket],
+            vec![QuicSocket::new(
+                response_recv_socket.try_clone().unwrap(),
+                None,
+            )],
             &keypair2,
             sender2,
             staked_nodes,
@@ -329,7 +336,7 @@ mod tests {
             max_concurrent_connections: _,
         } = solana_streamer::nonblocking::testing_utilities::spawn_stake_weighted_qos_server(
             "quic_streamer_test",
-            vec![s.try_clone().unwrap()],
+            vec![QuicSocket::new(s.try_clone().unwrap(), None)],
             &keypair,
             sender,
             staked_nodes,

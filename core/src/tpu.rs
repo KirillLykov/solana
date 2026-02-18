@@ -18,7 +18,6 @@ use {
             spawn_forwarding_stage, ForwardAddressGetter, ForwardingClientConfig,
             SpawnForwardingStageResult,
         },
-        quic_xdp_socket::udpsocket_to_quic_xdp_socket,
         sigverify::TransactionSigVerifier,
         sigverify_stage::SigVerifyStage,
         staked_nodes_updater_service::StakedNodesUpdaterService,
@@ -26,6 +25,7 @@ use {
         validator::{BlockProductionMethod, GeneratorConfig},
     },
     agave_votor::event::VotorEventSender,
+    agave_xdphelpers::{quic_xdp_socket::QuicSocket, xdp::XdpSender},
     crossbeam_channel::{bounded, unbounded, Receiver},
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
@@ -56,10 +56,7 @@ use {
         },
         streamer::StakedNodes,
     },
-    solana_turbine::{
-        broadcast_stage::{BroadcastStage, BroadcastStageType},
-        xdp::XdpSender,
-    },
+    solana_turbine::broadcast_stage::{BroadcastStage, BroadcastStageType},
     std::{
         collections::HashMap,
         net::UdpSocket,
@@ -190,8 +187,10 @@ impl Tpu {
             gossip_vote_receiver,
         } = banking_tracer_channels;
 
-        let tpu_vote_quic_sockets =
-            udpsocket_to_quic_xdp_socket(tpu_vote_quic_sockets, xdp_sender.clone());
+        let sockets = tpu_vote_quic_sockets
+            .into_iter()
+            .map(|socket| QuicSocket::new(socket, xdp_sender.clone()))
+            .collect::<Vec<_>>();
         // Streamer for Votes:
         let SpawnServerResult {
             endpoints: _,
@@ -200,7 +199,7 @@ impl Tpu {
         } = spawn_simple_qos_server(
             "solQuicTVo",
             "quic_streamer_tpu_vote",
-            tpu_vote_quic_sockets,
+            sockets,
             keypair,
             vote_packet_sender.clone(),
             staked_nodes.clone(),
@@ -211,6 +210,10 @@ impl Tpu {
         .unwrap();
 
         // Streamer for TPU
+        let sockets = transactions_quic_sockets
+            .into_iter()
+            .map(|socket| QuicSocket::new(socket, xdp_sender.clone()))
+            .collect::<Vec<_>>();
         let SpawnServerResult {
             endpoints: _,
             thread: tpu_quic_t,
@@ -218,7 +221,7 @@ impl Tpu {
         } = spawn_stake_wighted_qos_server(
             "solQuicTpu",
             "quic_streamer_tpu",
-            udpsocket_to_quic_xdp_socket(transactions_quic_sockets, xdp_sender.clone()),
+            sockets,
             keypair,
             packet_sender,
             staked_nodes.clone(),
@@ -229,6 +232,10 @@ impl Tpu {
         .unwrap();
 
         // Streamer for TPU forward
+        let sockets = transactions_forwards_quic_sockets
+            .into_iter()
+            .map(|socket| QuicSocket::new(socket, xdp_sender.clone()))
+            .collect::<Vec<_>>();
         let SpawnServerResult {
             endpoints: _,
             thread: tpu_forwards_quic_t,
@@ -236,7 +243,7 @@ impl Tpu {
         } = spawn_stake_wighted_qos_server(
             "solQuicTpuFwd",
             "quic_streamer_tpu_forwards",
-            udpsocket_to_quic_xdp_socket(transactions_forwards_quic_sockets, xdp_sender.clone()),
+            sockets,
             keypair,
             forwarded_packet_sender,
             staked_nodes.clone(),

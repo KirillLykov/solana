@@ -255,6 +255,7 @@ mod tests {
             consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
             vote::Vote,
         },
+        agave_xdphelpers::quic_xdp_socket::QuicSocket,
         solana_bls_signatures::Signature as BLSSignature,
         solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
         solana_keypair::Keypair,
@@ -379,7 +380,7 @@ mod tests {
         } = spawn_stake_wighted_qos_server(
             "AlpenglowLocalClusterTest",
             "voting_service_test",
-            [socket],
+            vec![QuicSocket::new(socket, None)],
             &Keypair::new(),
             sender,
             staked_nodes,

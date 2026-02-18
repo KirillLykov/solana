@@ -12,6 +12,7 @@ use {
         ArchiveFormat, SnapshotInterval, SnapshotVersion,
     },
     agave_votor::vote_history_storage,
+    agave_xdphelpers::xdp::{set_cpu_affinity, XdpConfig},
     clap::{crate_name, value_t, value_t_or_exit, values_t, values_t_or_exit, ArgMatches},
     crossbeam_channel::unbounded,
     log::*,
@@ -69,10 +70,7 @@ use {
         quic::{QuicStreamerConfig, SimpleQosQuicStreamerConfig, SwQosQuicStreamerConfig},
     },
     solana_tpu_client::tpu_client::DEFAULT_TPU_CONNECTION_POOL_SIZE,
-    solana_turbine::{
-        broadcast_stage::BroadcastStageType,
-        xdp::{set_cpu_affinity, XdpConfig},
-    },
+    solana_turbine::broadcast_stage::BroadcastStageType,
     solana_validator_exit::Exit,
     std::{
         collections::HashSet,
@@ -264,11 +262,11 @@ pub fn execute(
     #[cfg(target_os = "linux")]
     let maybe_xdp_retransmit_builder = {
         use {
+            agave_xdphelpers::xdp::{master_ip_if_bonded, XdpRetransmitBuilder},
             caps::{
                 CapSet,
                 Capability::{CAP_BPF, CAP_NET_ADMIN, CAP_NET_RAW, CAP_PERFMON, CAP_SYS_NICE},
             },
-            solana_turbine::xdp::{master_ip_if_bonded, XdpRetransmitBuilder},
         };
 
         let mut required_caps = HashSet::new();

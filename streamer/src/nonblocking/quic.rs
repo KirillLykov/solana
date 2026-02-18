@@ -7,6 +7,7 @@ use {
         quic::{configure_server, QuicServerError, QuicStreamerConfig, StreamerStats},
         streamer::StakedNodes,
     },
+    agave_xdphelpers::quic_xdp_socket::{QuicSocket, QuicXdpSocket},
     bytes::{BufMut, Bytes, BytesMut},
     crossbeam_channel::{Sender, TrySendError},
     futures::{stream::FuturesUnordered, Future, StreamExt as _},
@@ -135,7 +136,7 @@ pub struct SpawnNonBlockingServerResult {
 pub(crate) fn spawn_server<Q, C>(
     name: &'static str,
     stats: Arc<StreamerStats>,
-    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
+    sockets: Vec<QuicSocket>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     quic_server_params: QuicStreamerConfig,
@@ -151,14 +152,25 @@ where
 
     let endpoints = sockets
         .into_iter()
-        .map(|sock| {
-            Endpoint::new_with_abstract_socket(
+        .map(|socket| match socket {
+            QuicSocket::Xdp(quic_xdp_socket_config) => {
+                let socket = Arc::new(QuicXdpSocket::new(quic_xdp_socket_config).unwrap())
+                    as Arc<dyn AsyncUdpSocket>;
+                Endpoint::new_with_abstract_socket(
+                    EndpointConfig::default(),
+                    Some(config.clone()),
+                    socket,
+                    Arc::new(TokioRuntime),
+                )
+                .map_err(QuicServerError::EndpointFailed)
+            }
+            QuicSocket::Kernel(udp_socket) => Endpoint::new(
                 EndpointConfig::default(),
                 Some(config.clone()),
-                sock,
+                udp_socket,
                 Arc::new(TokioRuntime),
             )
-            .map_err(QuicServerError::EndpointFailed)
+            .map_err(QuicServerError::EndpointFailed),
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -1580,7 +1592,7 @@ pub mod test {
             max_concurrent_connections: _,
         } = spawn_stake_weighted_qos_server(
             "quic_streamer_test",
-            [s],
+            vec![QuicSocket::new(s, None)],
             &keypair,
             sender,
             staked_nodes,
@@ -1616,7 +1628,7 @@ pub mod test {
             max_concurrent_connections: _,
         } = spawn_stake_weighted_qos_server(
             "quic_streamer_test",
-            [s],
+            vec![QuicSocket::new(s, None)],
             &keypair,
             sender,
             staked_nodes,

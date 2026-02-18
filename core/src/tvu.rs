@@ -17,7 +17,6 @@ use {
         consensus::{tower_storage::TowerStorage, Tower},
         cost_update_service::CostUpdateService,
         drop_bank_service::DropBankService,
-        quic_xdp_socket::udpsocket_to_quic_xdp_socket,
         repair::repair_service::{OutstandingShredRepairs, RepairInfo, RepairServiceChannels},
         replay_stage::{ReplayReceivers, ReplaySenders, ReplayStage, ReplayStageConfig},
         shred_fetch_stage::{ShredFetchStage, SHRED_FETCH_CHANNEL_SIZE},
@@ -33,6 +32,7 @@ use {
         voting_service::{VotingService as BLSVotingService, VotingServiceOverride},
         votor::{Votor, VotorConfig},
     },
+    agave_xdphelpers::{quic_xdp_socket::QuicSocket, xdp::XdpSender},
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver, Sender},
     solana_client::connection_cache::ConnectionCache,
@@ -66,7 +66,7 @@ use {
         quic::{spawn_simple_qos_server, QuicStreamerConfig, SpawnServerResult},
         streamer::StakedNodes,
     },
-    solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
+    solana_turbine::retransmit_stage::RetransmitStage,
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
@@ -279,7 +279,7 @@ impl Tvu {
                     // Two staked connection per validator to account for hotspares
                     max_connections_per_peer: 2,
                 };
-                let sockets = udpsocket_to_quic_xdp_socket(vec![bls_socket], xdp_sender.clone());
+                let sockets = vec![QuicSocket::new(bls_socket, xdp_sender.clone())];
                 spawn_simple_qos_server(
                     "solQuicBLS",
                     "quic_streamer_bls",
@@ -355,7 +355,7 @@ impl Tvu {
             max_slots.clone(),
             rpc_subscriptions.clone(),
             slot_status_notifier.clone(),
-            tvu_config.xdp_sender,
+            tvu_config.xdp_sender.clone(),
             votor_event_sender.clone(),
         );
 
@@ -841,6 +841,7 @@ pub mod tests {
                 bls_connection_cache: Arc::new(bls_connection_cache),
                 voting_service_test_override: None,
             },
+            None,
         )
         .expect("assume success");
         if enable_wen_restart {

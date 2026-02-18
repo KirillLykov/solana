@@ -1,15 +1,13 @@
 use {
+    crate::xdp::{XdpAddrs, XdpSender},
+    bytes::Bytes,
     crossbeam_channel::TrySendError,
     quinn::{
         udp::{RecvMeta, Transmit, UdpSocketState},
         AsyncUdpSocket, UdpPoller,
     },
-    solana_ledger::shred,
-    solana_turbine::xdp::{XdpAddrs, XdpSender},
     std::{
-        fmt,
-        fmt::Debug,
-        future::Future,
+        fmt::{self, Debug},
         io::{self, IoSliceMut},
         net::{SocketAddr, SocketAddrV4},
         pin::Pin,
@@ -22,29 +20,52 @@ use {
     tokio::io::Interest,
 };
 
-pub fn udpsocket_to_quic_xdp_socket(
-    sockets: Vec<std::net::UdpSocket>,
-    xdp_sender: Option<XdpSender>,
-) -> Vec<Arc<dyn AsyncUdpSocket>> {
-    //TODO(klykov): get rid of unwraps later. Maybe we contruct these sockets as AsyncUdpSocket from
-    //the beginning instead.
-    let xdp_sender = xdp_sender.map(Arc::new);
+#[derive(Debug)]
+pub enum QuicSocket {
+    /// A QUIC socket that uses XDP for sending and kernel UDP socket for receiving.
+    Xdp(QuicXdpSocketConfig),
+    /// A QUIC socket that uses kernel UDP socket for both sending and receiving. This is used when
+    /// XDP is not available or disabled.
+    Kernel(std::net::UdpSocket),
+}
 
-    sockets
-        .into_iter()
-        .map(|socket| {
-            if let Some(ref sender) = xdp_sender {
-                Arc::new(QuicXdpSocket::new(socket, sender.clone()).unwrap())
-                    as Arc<dyn AsyncUdpSocket>
-            } else {
-                Arc::new(UdpSocket::new(socket).unwrap()) as Arc<dyn AsyncUdpSocket>
-            }
-        })
-        .collect()
+impl QuicSocket {
+    pub fn new(socket: std::net::UdpSocket, xdp_sender: Option<XdpSender>) -> Self {
+        if let Some(xdp_sender) = xdp_sender {
+            Self::Xdp(QuicXdpSocketConfig { socket, xdp_sender })
+        } else {
+            Self::Kernel(socket)
+        }
+    }
+}
+
+impl QuicSocket {
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        match self {
+            QuicSocket::Xdp(cfg) => cfg.socket.local_addr(),
+            QuicSocket::Kernel(socket) => socket.local_addr(),
+        }
+    }
+}
+
+/// Config is required because we may construct underlying sockets only when tokio runtime is
+/// present but in case of Streamer and other components runtimes are created deeply inside the call
+/// stack. Hence, we propagte this Config up to the Endpoint creation.
+pub struct QuicXdpSocketConfig {
+    pub socket: std::net::UdpSocket,
+    pub xdp_sender: XdpSender,
+}
+
+impl Debug for QuicXdpSocketConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QuicXdpSocketConfig")
+            .field("socket", &self.socket)
+            .finish()
+    }
 }
 
 struct IndexedXdpSender {
-    xdp: Arc<XdpSender>,
+    xdp_sender: XdpSender,
     src_addr: SocketAddrV4,
     next_sender: AtomicUsize,
 }
@@ -53,10 +74,10 @@ impl IndexedXdpSender {
     fn try_send(
         &self,
         destination: SocketAddr,
-        payload: shred::Payload,
-    ) -> Result<(), TrySendError<(XdpAddrs, shred::Payload, Option<SocketAddrV4>)>> {
+        payload: Bytes,
+    ) -> Result<(), TrySendError<(XdpAddrs, Bytes, Option<SocketAddrV4>)>> {
         let sender_idx = self.next_sender.fetch_add(1, Ordering::Relaxed);
-        self.xdp
+        self.xdp_sender
             .try_send(sender_idx, destination, payload, Some(self.src_addr))
     }
 }
@@ -67,16 +88,18 @@ pub struct QuicXdpSocket {
 }
 
 impl QuicXdpSocket {
-    pub fn new(sock: std::net::UdpSocket, xdp: Arc<XdpSender>) -> io::Result<Self> {
-        let src_addr = sock.local_addr()?;
+    pub fn new(
+        QuicXdpSocketConfig { socket, xdp_sender }: QuicXdpSocketConfig,
+    ) -> io::Result<Self> {
+        let src_addr = socket.local_addr()?;
         let SocketAddr::V4(src_addr) = src_addr else {
             panic!("IPv6 not supported");
         };
 
         Ok(Self {
-            ingress_kernel_udp: UdpSocket::new(sock)?,
+            ingress_kernel_udp: UdpSocket::new(socket)?,
             egress_xdp: IndexedXdpSender {
-                xdp,
+                xdp_sender,
                 src_addr: src_addr.into(),
                 next_sender: AtomicUsize::new(0),
             },
@@ -107,7 +130,7 @@ impl AsyncUdpSocket for QuicXdpSocket {
     }
 
     fn try_send(&self, t: &Transmit<'_>) -> io::Result<()> {
-        let payload = shred::Payload::from(t.contents.to_vec());
+        let payload = Bytes::from(t.contents.to_vec());
         match self.egress_xdp.try_send(t.destination, payload) {
             Ok(()) => return Ok(()),
             Err(TrySendError::Full(_)) => return Err(io::ErrorKind::WouldBlock.into()),
@@ -144,7 +167,7 @@ impl AsyncUdpSocket for QuicXdpSocket {
 
 /// Adapted from quinn's `UdpSocket` which is private.
 #[derive(Debug)]
-pub struct UdpSocket {
+struct UdpSocket {
     io: tokio::net::UdpSocket,
     inner: UdpSocketState,
 }
@@ -160,16 +183,11 @@ impl UdpSocket {
 
 impl AsyncUdpSocket for UdpSocket {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
-        Box::pin(UdpPollHelper::new(move || {
-            let socket = self.clone();
-            async move { socket.io.writable().await }
-        }))
+        unimplemented!("quic_xdp_socket does not support async IO on the kernel UDP socket")
     }
 
-    fn try_send(&self, transmit: &Transmit) -> io::Result<()> {
-        self.io.try_io(Interest::WRITABLE, || {
-            self.inner.send((&self.io).into(), transmit)
-        })
+    fn try_send(&self, _transmit: &Transmit) -> io::Result<()> {
+        unimplemented!("quic_xdp_socket does not support sending on the kernel UDP socket")
     }
 
     fn poll_recv(
@@ -202,57 +220,5 @@ impl AsyncUdpSocket for UdpSocket {
 
     fn max_receive_segments(&self) -> usize {
         self.inner.gro_segments()
-    }
-}
-
-pin_project_lite::pin_project! {
-    /// Helper adapting a function `MakeFut` that constructs a single-use future `Fut` into a
-    /// [`UdpPoller`] that may be reused indefinitely
-    struct UdpPollHelper<MakeFut, Fut> {
-        make_fut: MakeFut,
-        #[pin]
-        fut: Option<Fut>,
-    }
-}
-
-impl<MakeFut, Fut> UdpPollHelper<MakeFut, Fut> {
-    /// Construct a [`UdpPoller`] that calls `make_fut` to get the future to poll, storing it until
-    /// it yields [`Poll::Ready`], then creating a new one on the next
-    /// [`poll_writable`](UdpPoller::poll_writable)
-    fn new(make_fut: MakeFut) -> Self {
-        Self {
-            make_fut,
-            fut: None,
-        }
-    }
-}
-
-impl<MakeFut, Fut> UdpPoller for UdpPollHelper<MakeFut, Fut>
-where
-    MakeFut: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = io::Result<()>> + Send + Sync + 'static,
-{
-    fn poll_writable(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        let mut this = self.project();
-        if this.fut.is_none() {
-            this.fut.set(Some((this.make_fut)()));
-        }
-        // We're forced to `unwrap` here because `Fut` may be `!Unpin`, which means we can't safely
-        // obtain an `&mut Fut` after storing it in `self.fut` when `self` is already behind `Pin`,
-        // and if we didn't store it then we wouldn't be able to keep it alive between
-        // `poll_writable` calls.
-        let result = this.fut.as_mut().as_pin_mut().unwrap().poll(cx);
-        if result.is_ready() {
-            // Polling an arbitrary `Future` after it becomes ready is a logic error, so arrange for
-            // a new `Future` to be created on the next call.
-            this.fut.set(None);
-        }
-        result
-    }
-}
-
-impl<MakeFut, Fut> Debug for UdpPollHelper<MakeFut, Fut> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UdpPollHelper").finish_non_exhaustive()
     }
 }

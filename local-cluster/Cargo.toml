@@ -26,6 +26,7 @@ agave-logger = { workspace = true }
 agave-snapshots = { workspace = true }
 agave-votor = { workspace = true }
 agave-votor-messages = { workspace = true }
+agave-xdphelpers = { workspace = true }
 bincode = { workspace = true }
 crossbeam-channel = { workspace = true }
 itertools = { workspace = true }

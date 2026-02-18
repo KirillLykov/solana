@@ -6,6 +6,7 @@ use log::*;
 use {
     crate::{cluster::QuicTpuClient, local_cluster::LocalCluster},
     agave_votor_messages::consensus_message::ConsensusMessage,
+    agave_xdphelpers::quic_xdp_socket::QuicSocket,
     rand::{rng, Rng},
     rayon::{prelude::*, ThreadPool},
     solana_client::connection_cache::ConnectionCache,
@@ -479,7 +480,7 @@ pub fn start_quic_streamer_to_listen_for_votes_and_certs(
     let result = spawn_simple_qos_server(
         "solAlpenglowTest",
         "alpenglow_local_cluster_test",
-        [vote_listener_socket],
+        vec![QuicSocket::new(vote_listener_socket, None)],
         &Keypair::new(),
         sender,
         staked_nodes,

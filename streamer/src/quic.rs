@@ -8,11 +8,12 @@ use {
         },
         streamer::StakedNodes,
     },
+    agave_xdphelpers::quic_xdp_socket::QuicSocket,
     crossbeam_channel::Sender,
     pem::Pem,
     quinn::{
         crypto::rustls::{NoInitialCipherSuite, QuicServerConfig},
-        AsyncUdpSocket, Endpoint, IdleTimeout, ServerConfig, VarInt,
+        Endpoint, IdleTimeout, ServerConfig, VarInt,
     },
     rustls::KeyLogFile,
     solana_keypair::Keypair,
@@ -609,7 +610,7 @@ fn spawn_runtime_and_server<Q, C>(
     thread_name: &'static str,
     metrics_name: &'static str,
     stats: Arc<StreamerStats>,
-    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
+    sockets: Vec<QuicSocket>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     quic_server_params: QuicStreamerConfig,
@@ -657,7 +658,7 @@ where
 pub fn spawn_stake_wighted_qos_server(
     thread_name: &'static str,
     metrics_name: &'static str,
-    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
+    sockets: Vec<QuicSocket>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     staked_nodes: Arc<RwLock<StakedNodes>>,
@@ -689,7 +690,7 @@ pub fn spawn_stake_wighted_qos_server(
 pub fn spawn_simple_qos_server(
     thread_name: &'static str,
     metrics_name: &'static str,
-    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
+    sockets: Vec<QuicSocket>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     staked_nodes: Arc<RwLock<StakedNodes>>,
@@ -762,7 +763,7 @@ mod test {
         } = spawn_simple_qos_server(
             "solQuicTest",
             "quic_streamer_test",
-            [s],
+            vec![QuicSocket::new(s, None)],
             &keypair,
             sender,
             staked_nodes,
@@ -795,7 +796,7 @@ mod test {
         } = spawn_stake_wighted_qos_server(
             "solQuicTest",
             "quic_streamer_test",
-            [s],
+            vec![QuicSocket::new(s, None)],
             &keypair,
             sender,
             staked_nodes,
@@ -851,7 +852,7 @@ mod test {
         } = spawn_stake_wighted_qos_server(
             "solQuicTest",
             "quic_streamer_test",
-            [s],
+            vec![QuicSocket::new(s, None)],
             &keypair,
             sender,
             staked_nodes,
@@ -943,7 +944,7 @@ mod test {
         } = spawn_stake_wighted_qos_server(
             "solQuicTest",
             "quic_streamer_test",
-            [s],
+            vec![QuicSocket::new(s, None)],
             &keypair,
             sender,
             staked_nodes,

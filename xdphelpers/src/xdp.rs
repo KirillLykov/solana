@@ -2,6 +2,7 @@ use std::net::SocketAddrV4;
 
 // re-export since this is needed at validator startup
 pub use agave_xdp::{get_cpu, set_cpu_affinity};
+use bytes::Bytes;
 #[cfg(target_os = "linux")]
 use {
     agave_xdp::{
@@ -19,11 +20,10 @@ use {
 };
 use {
     crossbeam_channel::{Sender, TrySendError},
-    solana_ledger::shred,
     std::{
         error::Error,
         net::{Ipv4Addr, SocketAddr},
-        sync::{Arc, atomic::AtomicBool},
+        sync::{atomic::AtomicBool, Arc},
         thread,
     },
 };
@@ -70,7 +70,7 @@ impl XdpConfig {
 
 #[derive(Clone)]
 pub struct XdpSender {
-    senders: Vec<Sender<(XdpAddrs, shred::Payload, Option<SocketAddrV4>)>>,
+    senders: Vec<Sender<(XdpAddrs, Bytes, Option<SocketAddrV4>)>>,
 }
 
 pub enum XdpAddrs {
@@ -108,9 +108,9 @@ impl XdpSender {
         &self,
         sender_index: usize,
         addr: impl Into<XdpAddrs>,
-        payload: shred::Payload,
+        payload: Bytes,
         custom_src_addr: Option<SocketAddrV4>,
-    ) -> Result<(), TrySendError<(XdpAddrs, shred::Payload, Option<SocketAddrV4>)>> {
+    ) -> Result<(), TrySendError<(XdpAddrs, Bytes, Option<SocketAddrV4>)>> {
         self.senders[sender_index % self.senders.len()].try_send((
             addr.into(),
             payload,
@@ -250,6 +250,8 @@ impl XdpRetransmitBuilder {
             ROUTE_MONITOR_UPDATE_INTERVAL,
             || {
                 // we need to retain CAP_NET_ADMIN in case the netlink socket needs reinitialized
+
+                use log::info;
                 let retained_caps = caps::CapsHashSet::from_iter([caps::Capability::CAP_NET_ADMIN]);
                 caps::set(None, caps::CapSet::Permitted, &retained_caps)
                     .expect("linux allows permitted capset to be set");
