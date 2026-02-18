@@ -11,7 +11,9 @@ use {
     crossbeam_channel::{Sender, TrySendError},
     futures::{stream::FuturesUnordered, Future, StreamExt as _},
     indexmap::map::{Entry, IndexMap},
-    quinn::{Accept, Connecting, Connection, Endpoint, EndpointConfig, TokioRuntime},
+    quinn::{
+        Accept, AsyncUdpSocket, Connecting, Connection, Endpoint, EndpointConfig, TokioRuntime,
+    },
     rand::{rng, Rng},
     smallvec::SmallVec,
     solana_keypair::Keypair,
@@ -26,7 +28,7 @@ use {
     std::{
         array, fmt,
         iter::repeat_with,
-        net::{IpAddr, SocketAddr, UdpSocket},
+        net::{IpAddr, SocketAddr},
         pin::Pin,
         sync::{
             atomic::{AtomicU64, Ordering},
@@ -133,7 +135,7 @@ pub struct SpawnNonBlockingServerResult {
 pub(crate) fn spawn_server<Q, C>(
     name: &'static str,
     stats: Arc<StreamerStats>,
-    sockets: impl IntoIterator<Item = UdpSocket>,
+    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     quic_server_params: QuicStreamerConfig,
@@ -144,14 +146,13 @@ where
     Q: QosController<C> + Send + Sync + 'static,
     C: ConnectionContext + Send + Sync + 'static,
 {
-    let sockets: Vec<_> = sockets.into_iter().collect();
     info!("Start {name} quic server on {sockets:?}");
     let (config, _) = configure_server(keypair)?;
 
     let endpoints = sockets
         .into_iter()
         .map(|sock| {
-            Endpoint::new(
+            Endpoint::new_with_abstract_socket(
                 EndpointConfig::default(),
                 Some(config.clone()),
                 sock,

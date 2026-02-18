@@ -17,6 +17,7 @@ use {
         consensus::{tower_storage::TowerStorage, Tower},
         cost_update_service::CostUpdateService,
         drop_bank_service::DropBankService,
+        quic_xdp_socket::udpsocket_to_quic_xdp_socket,
         repair::repair_service::{OutstandingShredRepairs, RepairInfo, RepairServiceChannels},
         replay_stage::{ReplayReceivers, ReplaySenders, ReplayStage, ReplayStageConfig},
         shred_fetch_stage::{ShredFetchStage, SHRED_FETCH_CHANNEL_SIZE},
@@ -226,6 +227,7 @@ impl Tvu {
         slot_status_notifier: Option<SlotStatusNotifier>,
         vote_connection_cache: Arc<ConnectionCache>,
         votor_init: AlpenglowInitializationState,
+        xdp_sender: Option<XdpSender>,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
         let migration_status = bank_forks.read().unwrap().migration_status();
@@ -277,10 +279,11 @@ impl Tvu {
                     // Two staked connection per validator to account for hotspares
                     max_connections_per_peer: 2,
                 };
+                let sockets = udpsocket_to_quic_xdp_socket(vec![bls_socket], xdp_sender.clone());
                 spawn_simple_qos_server(
                     "solQuicBLS",
                     "quic_streamer_bls",
-                    vec![bls_socket],
+                    sockets,
                     &cluster_info.keypair(),
                     bls_packet_sender,
                     staked_nodes.clone(),

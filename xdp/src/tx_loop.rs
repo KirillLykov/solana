@@ -17,7 +17,7 @@ use {
     crossbeam_channel::{Receiver, Sender, TryRecvError},
     libc::{sysconf, _SC_PAGESIZE},
     std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
         thread,
         time::Duration,
     },
@@ -218,7 +218,7 @@ pub struct TxLoop<U: Umem> {
 impl<U: Umem> TxLoop<U> {
     pub fn run<T: AsRef<[u8]>, A: AsRef<[SocketAddr]>, R: Fn(&IpAddr) -> Option<NextHop>>(
         self,
-        receiver: Receiver<(A, T)>,
+        receiver: Receiver<(A, T, Option<SocketAddrV4>)>,
         drop_sender: Sender<(A, T)>,
         route_fn: R,
     ) {
@@ -259,9 +259,9 @@ impl<U: Umem> TxLoop<U> {
         let mut timeouts = 0;
         loop {
             match receiver.try_recv() {
-                Ok((addrs, payload)) => {
+                Ok((addrs, payload, src_port)) => {
                     batched_packets += addrs.as_ref().len();
-                    batched_items.push((addrs, payload));
+                    batched_items.push((addrs, payload, src_port));
                     timeouts = 0;
                     if batched_packets < BATCH_SIZE {
                         continue;
@@ -290,7 +290,7 @@ impl<U: Umem> TxLoop<U> {
             // necessary
             let mut chunk_remaining = BATCH_SIZE.min(batched_packets);
 
-            for (addrs, payload) in batched_items.drain(..) {
+            for (addrs, payload, custom_src_addr) in batched_items.drain(..) {
                 for addr in addrs.as_ref() {
                     if ring.available() == 0 || umem.available() == 0 {
                         // loop until we have space for the next packet
@@ -332,6 +332,11 @@ impl<U: Umem> TxLoop<U> {
                         continue;
                     };
 
+                    let (src_ip, src_port) = if let Some(src_addr) = custom_src_addr {
+                        (*src_addr.ip(), src_addr.port())
+                    } else {
+                        (src_ip, src_port)
+                    };
                     if let Some(gre) = &next_hop.gre {
                         frame.set_len(gre_packet_size(len));
                         let packet = umem.map_frame_mut(&frame);

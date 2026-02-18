@@ -1,3 +1,5 @@
+use std::net::SocketAddrV4;
+
 // re-export since this is needed at validator startup
 pub use agave_xdp::{get_cpu, set_cpu_affinity};
 #[cfg(target_os = "linux")]
@@ -68,7 +70,7 @@ impl XdpConfig {
 
 #[derive(Clone)]
 pub struct XdpSender {
-    senders: Vec<Sender<(XdpAddrs, shred::Payload)>>,
+    senders: Vec<Sender<(XdpAddrs, shred::Payload, Option<SocketAddrV4>)>>,
 }
 
 pub enum XdpAddrs {
@@ -102,13 +104,18 @@ impl AsRef<[SocketAddr]> for XdpAddrs {
 
 impl XdpSender {
     #[inline]
-    pub(crate) fn try_send(
+    pub fn try_send(
         &self,
         sender_index: usize,
         addr: impl Into<XdpAddrs>,
         payload: shred::Payload,
-    ) -> Result<(), TrySendError<(XdpAddrs, shred::Payload)>> {
-        self.senders[sender_index % self.senders.len()].try_send((addr.into(), payload))
+        custom_src_addr: Option<SocketAddrV4>,
+    ) -> Result<(), TrySendError<(XdpAddrs, shred::Payload, Option<SocketAddrV4>)>> {
+        self.senders[sender_index % self.senders.len()].try_send((
+            addr.into(),
+            payload,
+            custom_src_addr,
+        ))
     }
 }
 

@@ -12,7 +12,7 @@ use {
     pem::Pem,
     quinn::{
         crypto::rustls::{NoInitialCipherSuite, QuicServerConfig},
-        Endpoint, IdleTimeout, ServerConfig, VarInt,
+        AsyncUdpSocket, Endpoint, IdleTimeout, ServerConfig, VarInt,
     },
     rustls::KeyLogFile,
     solana_keypair::Keypair,
@@ -20,7 +20,6 @@ use {
     solana_perf::packet::PacketBatch,
     solana_tls_utils::{new_dummy_x509_certificate, tls_server_config_builder, NotifyKeyUpdate},
     std::{
-        net::UdpSocket,
         num::NonZeroUsize,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -610,7 +609,7 @@ fn spawn_runtime_and_server<Q, C>(
     thread_name: &'static str,
     metrics_name: &'static str,
     stats: Arc<StreamerStats>,
-    sockets: impl IntoIterator<Item = UdpSocket>,
+    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     quic_server_params: QuicStreamerConfig,
@@ -658,7 +657,7 @@ where
 pub fn spawn_stake_wighted_qos_server(
     thread_name: &'static str,
     metrics_name: &'static str,
-    sockets: impl IntoIterator<Item = UdpSocket>,
+    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     staked_nodes: Arc<RwLock<StakedNodes>>,
@@ -690,7 +689,7 @@ pub fn spawn_stake_wighted_qos_server(
 pub fn spawn_simple_qos_server(
     thread_name: &'static str,
     metrics_name: &'static str,
-    sockets: impl IntoIterator<Item = UdpSocket>,
+    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     staked_nodes: Arc<RwLock<StakedNodes>>,

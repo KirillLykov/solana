@@ -1,6 +1,6 @@
 //! The `validator` module hosts all the validator microservices.
-
 pub use solana_perf::report_target_features;
+
 use {
     crate::{
         admin_rpc_post_init::{AdminRpcRequestMetadataPostInit, KeyUpdaterType, KeyUpdaters},
@@ -1720,6 +1720,7 @@ impl Validator {
                 bls_connection_cache,
                 voting_service_test_override: config.voting_service_test_override.clone(),
             },
+            xdp_sender.clone(),
         )
         .map_err(ValidatorError::Other)?;
 

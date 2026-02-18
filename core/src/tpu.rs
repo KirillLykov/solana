@@ -18,6 +18,7 @@ use {
             spawn_forwarding_stage, ForwardAddressGetter, ForwardingClientConfig,
             SpawnForwardingStageResult,
         },
+        quic_xdp_socket::udpsocket_to_quic_xdp_socket,
         sigverify::TransactionSigVerifier,
         sigverify_stage::SigVerifyStage,
         staked_nodes_updater_service::StakedNodesUpdaterService,
@@ -189,6 +190,8 @@ impl Tpu {
             gossip_vote_receiver,
         } = banking_tracer_channels;
 
+        let tpu_vote_quic_sockets =
+            udpsocket_to_quic_xdp_socket(tpu_vote_quic_sockets, xdp_sender.clone());
         // Streamer for Votes:
         let SpawnServerResult {
             endpoints: _,
@@ -215,7 +218,7 @@ impl Tpu {
         } = spawn_stake_wighted_qos_server(
             "solQuicTpu",
             "quic_streamer_tpu",
-            transactions_quic_sockets,
+            udpsocket_to_quic_xdp_socket(transactions_quic_sockets, xdp_sender.clone()),
             keypair,
             packet_sender,
             staked_nodes.clone(),
@@ -233,7 +236,7 @@ impl Tpu {
         } = spawn_stake_wighted_qos_server(
             "solQuicTpuFwd",
             "quic_streamer_tpu_forwards",
-            transactions_forwards_quic_sockets,
+            udpsocket_to_quic_xdp_socket(transactions_forwards_quic_sockets, xdp_sender.clone()),
             keypair,
             forwarded_packet_sender,
             staked_nodes.clone(),

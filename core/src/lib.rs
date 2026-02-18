@@ -27,6 +27,7 @@ pub mod forwarding_stage;
 pub mod gen_keys;
 pub mod next_leader;
 pub mod optimistic_confirmation_verifier;
+pub mod quic_xdp_socket;
 pub mod repair;
 pub mod replay_stage;
 pub mod resource_limits;

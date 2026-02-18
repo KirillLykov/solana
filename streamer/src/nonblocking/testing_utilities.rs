@@ -11,8 +11,8 @@ use {
     },
     crossbeam_channel::{unbounded, Receiver, Sender},
     quinn::{
-        crypto::rustls::QuicClientConfig, ClientConfig, Connection, EndpointConfig, IdleTimeout,
-        TokioRuntime, TransportConfig,
+        crypto::rustls::QuicClientConfig, AsyncUdpSocket, ClientConfig, Connection, EndpointConfig,
+        IdleTimeout, TokioRuntime, TransportConfig,
     },
     solana_keypair::Keypair,
     solana_net_utils::sockets::{
@@ -22,7 +22,7 @@ use {
     solana_perf::packet::PacketBatch,
     solana_tls_utils::{new_dummy_x509_certificate, tls_client_config_builder},
     std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+        net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::{Arc, RwLock},
         time::{Duration, Instant},
     },
@@ -38,7 +38,7 @@ const QUIC_KEEP_ALIVE_FOR_TESTS: Duration = Duration::from_secs(5);
 /// Spawn a streamer instance in the current tokio runtime.
 pub fn spawn_stake_weighted_qos_server(
     name: &'static str,
-    sockets: impl IntoIterator<Item = UdpSocket>,
+    sockets: Vec<Arc<dyn AsyncUdpSocket>>,
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     staked_nodes: Arc<RwLock<StakedNodes>>,
@@ -99,7 +99,7 @@ pub struct SpawnTestServerResult {
     pub cancel: CancellationToken,
 }
 
-pub fn create_quic_server_sockets() -> Vec<UdpSocket> {
+pub fn create_quic_server_sockets() -> Vec<Arc<dyn AsyncUdpSocket>> {
     let num = if cfg!(not(target_os = "windows")) {
         10
     } else {
@@ -114,6 +114,9 @@ pub fn create_quic_server_sockets() -> Vec<UdpSocket> {
     )
     .expect("bind operation for quic server sockets should succeed")
     .1
+    .into_iter()
+    .map(|sock| Arc::new(UdpSocket::new(sock).unwrap()) as Arc<dyn AsyncUdpSocket>)
+    .collect()
 }
 
 pub fn setup_quic_server(
