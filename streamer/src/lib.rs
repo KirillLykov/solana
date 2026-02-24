@@ -5,6 +5,7 @@ pub mod msghdr;
 pub mod nonblocking;
 pub mod packet;
 pub mod quic;
+pub mod quic_xdp_socket;
 pub mod recvmmsg;
 pub mod sendmmsg;
 pub mod streamer;
@@ -14,3 +15,5 @@ extern crate log;
 
 #[macro_use]
 extern crate solana_metrics;
+
+pub use agave_xdphelpers::xdp::XdpSender;

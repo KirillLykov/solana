@@ -6,9 +6,9 @@ use {
             simple_qos::{SimpleQos, SimpleQosConfig},
             swqos::{SwQos, SwQosConfig},
         },
+        quic_xdp_socket::QuicSocket,
         streamer::StakedNodes,
     },
-    agave_xdphelpers::quic_xdp_socket::QuicSocket,
     crossbeam_channel::Sender,
     pem::Pem,
     quinn::{
@@ -232,7 +232,6 @@ pub struct StreamerStats {
     pub(crate) xdp_num_sent: AtomicUsize,
     pub(crate) xdp_num_send_full: AtomicUsize,
     pub(crate) xdp_num_receive: AtomicUsize,
-}
 }
 
 impl StreamerStats {

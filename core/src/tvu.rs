@@ -32,7 +32,6 @@ use {
         voting_service::{VotingService as BLSVotingService, VotingServiceOverride},
         votor::{Votor, VotorConfig},
     },
-    agave_xdphelpers::{quic_xdp_socket::QuicSocket, xdp::XdpSender},
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver, Sender},
     solana_client::connection_cache::ConnectionCache,
@@ -66,6 +65,7 @@ use {
         quic::{spawn_simple_qos_server, QuicStreamerConfig, SpawnServerResult},
         streamer::StakedNodes,
     },
+    solana_streamer::{quic_xdp_socket::QuicSocket, XdpSender},
     solana_turbine::retransmit_stage::RetransmitStage,
     std::{
         collections::HashSet,

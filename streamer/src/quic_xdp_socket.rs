@@ -1,5 +1,6 @@
 use {
-    crate::xdp::{XdpAddrs, XdpSender},
+    crate::quic::StreamerStats,
+    agave_xdphelpers::xdp::{XdpAddrs, XdpSender},
     bytes::Bytes,
     crossbeam_channel::TrySendError,
     quinn::{
