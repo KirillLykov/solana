@@ -7,7 +7,7 @@ use {
         quic::{configure_server, QuicServerError, QuicStreamerConfig, StreamerStats},
         streamer::StakedNodes,
     },
-    agave_xdphelpers::quic_xdp_socket::{QuicSocket, QuicXdpSocket},
+    agave_xdphelpers::quic_xdp_socket::{QuicSocket, QuicXdpSocket, QuicXdpStats},
     bytes::{BufMut, Bytes, BytesMut},
     crossbeam_channel::{Sender, TrySendError},
     futures::{stream::FuturesUnordered, Future, StreamExt as _},
@@ -154,8 +154,9 @@ where
         .into_iter()
         .map(|socket| match socket {
             QuicSocket::Xdp(quic_xdp_socket_config) => {
-                let socket = Arc::new(QuicXdpSocket::new(quic_xdp_socket_config).unwrap())
-                    as Arc<dyn AsyncUdpSocket>;
+                let socket =
+                    Arc::new(QuicXdpSocket::new(quic_xdp_socket_config, stats.clone()).unwrap())
+                        as Arc<dyn AsyncUdpSocket>;
                 Endpoint::new_with_abstract_socket(
                     EndpointConfig::default(),
                     Some(config.clone()),

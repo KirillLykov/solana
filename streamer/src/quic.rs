@@ -229,6 +229,10 @@ pub struct StreamerStats {
     pub(crate) outstanding_incoming_connection_attempts: AtomicUsize,
     pub(crate) total_incoming_connection_attempts: AtomicUsize,
     pub(crate) quic_endpoints_count: AtomicUsize,
+    pub(crate) xdp_num_sent: AtomicUsize,
+    pub(crate) xdp_num_send_full: AtomicUsize,
+    pub(crate) xdp_num_receive: AtomicUsize,
+}
 }
 
 impl StreamerStats {
@@ -556,6 +560,21 @@ impl StreamerStats {
                 "refused_connections_too_many_open_connections",
                 self.refused_connections_too_many_open_connections
                     .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "xdp_num_sent",
+                self.xdp_num_sent.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "xdp_num_send_full",
+                self.xdp_num_send_full.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "xdp_num_receive",
+                self.xdp_num_receive.swap(0, Ordering::Relaxed),
                 i64
             ),
         );

@@ -64,10 +64,28 @@ impl Debug for QuicXdpSocketConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct QuicXdpStats {
+    pub num_sent: Arc<AtomicUsize>,
+    pub num_send_full: Arc<AtomicUsize>,
+    pub num_receive: Arc<AtomicUsize>,
+}
+
+impl Default for QuicXdpStats {
+    fn default() -> Self {
+        Self {
+            num_sent: Arc::new(AtomicUsize::new(0)),
+            num_send_full: Arc::new(AtomicUsize::new(0)),
+            num_receive: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
 struct IndexedXdpSender {
     xdp_sender: XdpSender,
     src_addr: SocketAddrV4,
     next_sender: AtomicUsize,
+    stats: Arc<StreamerStats>,
 }
 
 impl IndexedXdpSender {
@@ -90,6 +108,7 @@ pub struct QuicXdpSocket {
 impl QuicXdpSocket {
     pub fn new(
         QuicXdpSocketConfig { socket, xdp_sender }: QuicXdpSocketConfig,
+        stats: Arc<StreamerStats>,
     ) -> io::Result<Self> {
         let src_addr = socket.local_addr()?;
         let SocketAddr::V4(src_addr) = src_addr else {
@@ -102,6 +121,7 @@ impl QuicXdpSocket {
                 xdp_sender,
                 src_addr: src_addr.into(),
                 next_sender: AtomicUsize::new(0),
+                stats,
             },
         })
     }
@@ -132,8 +152,20 @@ impl AsyncUdpSocket for QuicXdpSocket {
     fn try_send(&self, t: &Transmit<'_>) -> io::Result<()> {
         let payload = Bytes::from(t.contents.to_vec());
         match self.egress_xdp.try_send(t.destination, payload) {
-            Ok(()) => return Ok(()),
-            Err(TrySendError::Full(_)) => return Err(io::ErrorKind::WouldBlock.into()),
+            Ok(()) => {
+                self.egress_xdp
+                    .stats
+                    .xdp_num_sent
+                    .fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
+            Err(TrySendError::Full(_)) => {
+                self.egress_xdp
+                    .stats
+                    .xdp_num_send_full
+                    .fetch_add(1, Ordering::Relaxed);
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
             Err(TrySendError::Disconnected(_)) => return Err(io::ErrorKind::BrokenPipe.into()),
         }
     }
@@ -144,7 +176,14 @@ impl AsyncUdpSocket for QuicXdpSocket {
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
     ) -> Poll<io::Result<usize>> {
-        self.ingress_kernel_udp.poll_recv(cx, bufs, meta)
+        let res = self.ingress_kernel_udp.poll_recv(cx, bufs, meta);
+        if res.is_ready() {
+            self.egress_xdp
+                .stats
+                .xdp_num_receive
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        res
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {

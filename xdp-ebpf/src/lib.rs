@@ -8,10 +8,10 @@
 #![warn(unsafe_op_in_unsafe_fn)]
 #![no_std]
 
+/*
 #[repr(C, align(32))]
 pub struct AlignedBytes<const N: usize>(pub [u8; N]);
 
-#[cfg(all(target_os = "linux", not(target_arch = "bpf")))]
 #[unsafe(no_mangle)]
 pub static AGAVE_XDP_EBPF_PROGRAM: AlignedBytes<
     { include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/agave-xdp-prog")).len() },
@@ -19,3 +19,8 @@ pub static AGAVE_XDP_EBPF_PROGRAM: AlignedBytes<
     env!("CARGO_MANIFEST_DIR"),
     "/agave-xdp-prog"
 )));
+*/
+#[cfg(all(target_os = "linux", not(target_arch = "bpf")))]
+#[unsafe(no_mangle)]
+pub static AGAVE_XDP_EBPF_PROGRAM: &[u8] =
+    aya::include_bytes_aligned!(concat!(env!("CARGO_MANIFEST_DIR"), "/agave-xdp-prog"));
