@@ -11,6 +11,8 @@ pub mod retransmit_stage;
 
 pub mod sigverify_shreds;
 
+pub use agave_xdp::xdp_retransmitter::FixedSrcXdpSender;
+
 #[macro_use]
 extern crate log;
 

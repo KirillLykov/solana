@@ -8,9 +8,11 @@ use {
         fail_entry_verification_broadcast_run::FailEntryVerificationBroadcastRun,
         standard_broadcast_run::StandardBroadcastRun,
     },
-    crate::cluster_nodes::{ClusterNodes, ClusterNodesCache},
+    crate::{
+        FixedSrcXdpSender,
+        cluster_nodes::{ClusterNodes, ClusterNodesCache},
+    },
     agave_votor::event::VotorEventSender,
-    agave_xdp::xdp_retransmitter::XdpSender,
     crossbeam_channel::{Receiver, RecvError, RecvTimeoutError, Sender, unbounded},
     itertools::Itertools,
     solana_clock::Slot,
@@ -121,7 +123,7 @@ impl BroadcastStageType {
         blockstore: Arc<Blockstore>,
         bank_forks: Arc<RwLock<BankForks>>,
         shred_version: u16,
-        xdp_sender: Option<XdpSender>,
+        xdp_sender: Option<FixedSrcXdpSender>,
         votor_event_sender: VotorEventSender,
     ) -> BroadcastStage {
         let migration_status = bank_forks.read().unwrap().migration_status();
@@ -292,7 +294,7 @@ impl BroadcastStage {
         blockstore: Arc<Blockstore>,
         bank_forks: Arc<RwLock<BankForks>>,
         mut broadcast_stage_run: impl BroadcastRun + Send + 'static + Clone,
-        xdp_sender: Option<XdpSender>,
+        xdp_sender: Option<FixedSrcXdpSender>,
     ) -> Self {
         let (socket_sender, socket_receiver) = unbounded();
         let (blockstore_sender, blockstore_receiver) = unbounded();
@@ -480,7 +482,7 @@ fn update_peer_stats(
 #[derive(Clone, Copy)]
 pub enum BroadcastSocket<'a> {
     Udp(&'a UdpSocket),
-    Xdp(&'a XdpSender),
+    Xdp(&'a FixedSrcXdpSender),
 }
 
 /// Broadcasts shreds from the leader (i.e. this node) to the root of the

@@ -2,6 +2,7 @@
 
 use {
     crate::{
+        FixedSrcXdpSender,
         addr_cache::AddrCache,
         cluster_nodes::{
             ClusterNodes, ClusterNodesCache, DATA_PLANE_FANOUT, Error, MAX_NUM_TURBINE_HOPS,
@@ -9,7 +10,6 @@ use {
     },
     agave_votor::event::VotorEvent,
     agave_votor_messages::migration::MigrationStatus,
-    agave_xdp::xdp_retransmitter::XdpSender,
     crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError},
     lru::LruCache,
     rand::Rng,
@@ -224,7 +224,7 @@ impl<const K: usize> ShredDeduper<K> {
 
 enum RetransmitSocket<'a> {
     Socket(&'a UdpSocket),
-    Xdp(&'a XdpSender),
+    Xdp(&'a FixedSrcXdpSender),
     Multihomed {
         sockets: &'a [UdpSocket],
         interface_offset: usize,
@@ -237,11 +237,11 @@ impl<'a> RetransmitSocket<'a> {
     pub fn new(
         thread_index: usize,
         retransmit_sockets: &'a [UdpSocket],
-        xdp_sender: Option<&'a XdpSender>,
+        xdp_sender: Option<&'a FixedSrcXdpSender>,
         cluster_info: &'a ClusterInfo,
     ) -> Self {
-        if let Some(xdp_sender) = xdp_sender {
-            RetransmitSocket::Xdp(xdp_sender)
+        if let Some(sender) = xdp_sender {
+            RetransmitSocket::Xdp(sender)
         } else if cluster_info.bind_ip_addrs().multihoming_enabled() {
             let sockets_per_interface =
                 retransmit_sockets.len() / cluster_info.bind_ip_addrs().len();
@@ -292,7 +292,7 @@ fn retransmit(
     cluster_info: &ClusterInfo,
     retransmit_receiver: &Receiver<Vec<shred::Payload>>,
     retransmit_sockets: &[UdpSocket],
-    xdp_sender: Option<&XdpSender>,
+    xdp_sender: Option<&FixedSrcXdpSender>,
     stats: &mut RetransmitStats,
     cluster_nodes_cache: &ClusterNodesCache<RetransmitStage>,
     addr_cache: &mut AddrCache,
@@ -641,7 +641,7 @@ impl RetransmitStage {
         max_slots: Arc<MaxSlots>,
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         slot_status_notifier: Option<SlotStatusNotifier>,
-        xdp_sender: Option<XdpSender>,
+        xdp_sender: Option<FixedSrcXdpSender>,
         votor_event_sender: Sender<VotorEvent>,
     ) -> Self {
         let migration_status = bank_forks.read().unwrap().migration_status();
