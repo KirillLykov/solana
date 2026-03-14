@@ -387,6 +387,7 @@ pub struct ValidatorConfig {
     pub repair_handler_type: RepairHandlerType,
     // Thread niceness adjustment for snapshot packager service
     pub snapshot_packager_niceness_adj: i8,
+    pub maybe_turbine_src_addr: Option<SocketAddrV4>,
 }
 
 impl ValidatorConfig {
@@ -468,6 +469,7 @@ impl ValidatorConfig {
             voting_service_test_override: None,
             repair_handler_type: RepairHandlerType::default(),
             snapshot_packager_niceness_adj: 0,
+            maybe_turbine_src_addr: None,
         }
     }
 
@@ -619,12 +621,6 @@ impl ValidatorTpuConfig {
     }
 }
 
-/// [`XdpRetransmitSetup`] contains the necessary information to set up an XDP retransmitter.
-pub struct XdpRetransmitSetup {
-    pub builder: XdpRetransmitBuilder,
-    pub src_addr: SocketAddrV4,
-}
-
 pub struct Validator {
     /// The destination file for validator logs; `stderr` is used if `None`
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -683,7 +679,7 @@ impl Validator {
         socket_addr_space: SocketAddrSpace,
         tpu_config: ValidatorTpuConfig,
         admin_rpc_service_post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
-        maybe_xdp_retransmit_setup: Option<XdpRetransmitSetup>,
+        maybe_xdp_retransmit_builder: Option<XdpRetransmitBuilder>,
     ) -> Result<Self> {
         let exit = Arc::new(AtomicBool::new(false));
         Self::new_with_exit(
@@ -700,7 +696,7 @@ impl Validator {
             socket_addr_space,
             tpu_config,
             admin_rpc_service_post_init,
-            maybe_xdp_retransmit_setup,
+            maybe_xdp_retransmit_builder,
             exit,
         )
     }
@@ -720,7 +716,7 @@ impl Validator {
         socket_addr_space: SocketAddrSpace,
         tpu_config: ValidatorTpuConfig,
         admin_rpc_service_post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
-        maybe_xdp_retransmit_setup: Option<XdpRetransmitSetup>,
+        maybe_xdp_retransmit_builder: Option<XdpRetransmitBuilder>,
         exit: Arc<AtomicBool>,
     ) -> Result<Self> {
         #[cfg(debug_assertions)]
@@ -1591,16 +1587,21 @@ impl Validator {
         // This channel backing up indicates a serious problem in votor
         let (votor_event_sender, votor_event_receiver) = bounded(1000);
 
-        let (xdp_retransmitter, turbine_xdp_sender) = if let Some(XdpRetransmitSetup {
-            builder: xdp_retransmit_builder,
-            src_addr,
-        }) = maybe_xdp_retransmit_setup
-        {
-            let (rtx, sender) = xdp_retransmit_builder.build();
-            (Some(rtx), Some(TurbineXdpSender::new(sender, src_addr)))
-        } else {
-            (None, None)
-        };
+        let (xdp_retransmitter, turbine_xdp_sender) =
+            if let Some(xdp_retransmit_builder) = maybe_xdp_retransmit_builder {
+                let (rtx, sender) = xdp_retransmit_builder.build();
+                (
+                    Some(rtx),
+                    Some(TurbineXdpSender::new(
+                        sender,
+                        config
+                            .maybe_turbine_src_addr
+                            .expect("turbine src address should be present if xdp is used."),
+                    )),
+                )
+            } else {
+                (None, None)
+            };
 
         // disable all2all tests if not allowed for a given cluster type
         let alpenglow_socket = if genesis_config.cluster_type == ClusterType::Testnet

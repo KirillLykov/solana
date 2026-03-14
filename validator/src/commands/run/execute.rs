@@ -263,7 +263,7 @@ pub fn execute(
     let exit = Arc::new(AtomicBool::new(false));
 
     #[cfg(target_os = "linux")]
-    let maybe_xdp_retransmit_setup = {
+    let (maybe_xdp_retransmit_builder, maybe_turbine_src_addr) = {
         use {
             agave_xdp::xdp_retransmitter::XdpRetransmitBuilder,
             caps::{
@@ -335,41 +335,44 @@ pub fn execute(
         // XDP _MUST_ be setup _BEFORE_ the app spawns any threads to ensure linux
         // capabilities do not leak, leaving the process in a state where it could
         // potentially be used as a privilege escalation gadget
-        let maybe_xdp_retransmit_setup = retransmit_xdp.clone().map(|xdp_config| {
-            use {
-                agave_xdp::{default_route_ipv4, interface_ipv4},
-                solana_core::validator::XdpRetransmitSetup,
-                std::net::SocketAddrV4,
-            };
+        let (maybe_xdp_retransmit_builder, maybe_turbine_src_addr) = retransmit_xdp
+            .clone()
+            .map(|xdp_config| {
+                use {
+                    agave_xdp::{default_route_ipv4, interface_ipv4},
+                    std::net::SocketAddrV4,
+                };
 
-            let src_port = node.sockets.retransmit_sockets[0]
-                .local_addr()
-                .expect("failed to get local address")
-                .port();
-            let src_ip = match node.bind_ip_addrs.active() {
-                IpAddr::V4(ip) if !ip.is_unspecified() => ip,
-                IpAddr::V4(_unspecified) => {
-                    if let Some(interface) = xdp_config.interface.as_ref() {
-                        interface_ipv4(interface)
-                    } else {
-                        default_route_ipv4()
+                let src_port = node.sockets.retransmit_sockets[0]
+                    .local_addr()
+                    .expect("failed to get local address")
+                    .port();
+                let src_ip = match node.bind_ip_addrs.active() {
+                    IpAddr::V4(ip) if !ip.is_unspecified() => ip,
+                    IpAddr::V4(_unspecified) => {
+                        if let Some(interface) = xdp_config.interface.as_ref() {
+                            interface_ipv4(interface)
+                        } else {
+                            default_route_ipv4()
+                        }
                     }
-                }
-                _ => panic!("IPv6 not supported"),
-            };
-            let src_addr = SocketAddrV4::new(src_ip, src_port);
-            XdpRetransmitSetup {
-                builder: XdpRetransmitBuilder::new(xdp_config, exit.clone())
-                    .expect("failed to create xdp retransmitter"),
-                src_addr,
-            }
-        });
+                    _ => panic!("IPv6 not supported"),
+                };
+                (
+                    Some(
+                        XdpRetransmitBuilder::new(xdp_config, exit.clone())
+                            .expect("failed to create xdp retransmitter"),
+                    ),
+                    Some(SocketAddrV4::new(src_ip, src_port)),
+                )
+            })
+            .unwrap_or((None, None));
 
         // we're done with caps needed to init xdp now. remove them from our process
         caps::set(None, CapSet::Permitted, &retained_caps)
             .expect("linux allows permitted capset to be set");
 
-        maybe_xdp_retransmit_setup
+        (maybe_xdp_retransmit_builder, maybe_turbine_src_addr)
     };
 
     #[cfg(not(target_os = "linux"))]
@@ -888,6 +891,7 @@ pub fn execute(
             "snapshot_packager_niceness_adj",
             i8
         ),
+        maybe_turbine_src_addr,
     };
 
     let vote_account = pubkey_of(matches, "vote_account").unwrap_or_else(|| {
@@ -1127,7 +1131,7 @@ pub fn execute(
             sigverify_threads: tpu_sigverify_threads,
         },
         admin_service_post_init,
-        maybe_xdp_retransmit_setup,
+        maybe_xdp_retransmit_builder,
         exit,
     )
     .map_err(|err| format!("{err:?}"))?;
