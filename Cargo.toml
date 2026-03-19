@@ -316,6 +316,7 @@ parking_lot = "0.12"
 pem = "1.1.1"
 percentage = "0.1.0"
 pickledb = { version = "0.5.1", default-features = false }
+pin-project-lite = { version = "0.2.14" }
 predicates = "3.1"
 pretty-hex = "0.4.2"
 pretty_assertions = "1.4.1"
