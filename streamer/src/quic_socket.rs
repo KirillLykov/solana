@@ -42,6 +42,10 @@ impl From<std::net::UdpSocket> for QuicSocket {
 }
 
 impl QuicSocket {
+    pub fn with_xdp(socket: std::net::UdpSocket, xdp_sender: XdpSender) -> Self {
+        Self::Xdp(QuicXdpSocketBundle { socket, xdp_sender })
+    }
+
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         match self {
             QuicSocket::Xdp(cfg) => cfg.socket.local_addr(),
