@@ -4,6 +4,7 @@ use {
         netlink_get_interfaces, netlink_get_neighbors, netlink_get_routes,
     },
     libc::{AF_INET, AF_INET6},
+    log::info,
     std::{
         io,
         net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -372,6 +373,7 @@ impl Router {
         debug_assert!(self.cached_gre_info.is_none());
         let next_hop = self.route(remote).ok()?;
         let mac_addr = next_hop.mac_addr?;
+        info!("@@@ interface_gre_route_info: {:?}", next_hop);
 
         Some(GreRouteInfo {
             if_index: interface.if_index,

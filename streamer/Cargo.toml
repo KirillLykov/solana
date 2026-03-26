@@ -21,6 +21,7 @@ agave-unstable-api = []
 dev-context-only-utils = []
 
 [dependencies]
+pin-project-lite = { version = "0.2.14"}
 agave-xdp = { workspace = true }
 arc-swap = { workspace = true }
 bytes = { workspace = true }

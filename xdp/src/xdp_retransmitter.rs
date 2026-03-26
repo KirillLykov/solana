@@ -322,7 +322,9 @@ impl XdpRetransmitBuilder {
                     .spawn(move || {
                         tx_loop.run(receiver, drop_sender, move |ip| {
                             let r = atomic_router.load();
-                            r.route(*ip).ok()
+                            let res = r.route(*ip).ok();
+                            info!("@@@ route lookup for {:?} returned {:?}", ip, res);
+                            res
                         })
                     })
                     .unwrap(),
