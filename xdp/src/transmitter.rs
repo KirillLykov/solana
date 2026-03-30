@@ -165,6 +165,14 @@ impl XdpSender {
             .expect("XdpSender::senders should not be empty");
         self.senders[idx].try_send(packet)
     }
+
+    pub fn len(&self) -> usize {
+        self.senders.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.senders.is_empty()
+    }
 }
 
 pub struct Transmitter {

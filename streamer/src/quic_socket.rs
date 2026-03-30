@@ -100,11 +100,7 @@ impl QuicXdpTxSocket {
 
         Ok(Self {
             udp_socket: Arc::new(UdpSocket::new(socket)?),
-            xdp_sender: IndexedXdpSender {
-                xdp_sender,
-                src_addr,
-                next_sender_index: AtomicUsize::new(0),
-            },
+            xdp_sender: IndexedXdpSender::new(xdp_sender, src_addr),
             local_ips,
         })
     }
@@ -180,20 +176,33 @@ impl AsyncUdpSocket for QuicXdpTxSocket {
 
 /// [`IndexedXdpSender`] wraps `XdpSender` to provide a simple round-robin sender index for each
 /// packet sent. It is needed because `AsyncUdpSocket::try_send` does not provide a way to specify
-/// the sender index.
+/// the sender index. If the `XdpSender` has only one sender, the index is always 0 and the atomic
+/// is not used.
 struct IndexedXdpSender {
     xdp_sender: XdpSender,
     src_addr: SocketAddrV4,
-    next_sender_index: AtomicUsize,
+    next_sender_index: Option<AtomicUsize>,
 }
 
 impl IndexedXdpSender {
+    fn new(xdp_sender: XdpSender, src_addr: SocketAddrV4) -> Self {
+        let next_sender_index = (xdp_sender.len() > 1).then(|| AtomicUsize::new(0));
+        Self {
+            xdp_sender,
+            src_addr,
+            next_sender_index,
+        }
+    }
+
     fn try_send(
         &self,
         destination: SocketAddr,
         payload: Bytes,
     ) -> Result<(), TrySendError<BytesTxPacket>> {
-        let sender_idx = self.next_sender_index.fetch_add(1, Ordering::Relaxed);
+        let sender_idx = self
+            .next_sender_index
+            .as_ref()
+            .map_or(0, |idx| idx.fetch_add(1, Ordering::Relaxed));
         self.xdp_sender.try_send(
             sender_idx,
             BytesTxPacket::new(self.src_addr, destination, payload),
