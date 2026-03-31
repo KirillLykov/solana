@@ -1,0 +1,20 @@
+[package]
+name = "agave-perf-trace"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+libc.workspace = true
+log.workspace = true
+slowlana-trace.workspace = true
+
+[features]
+agave-unstable-api = []
+
+[lints]
+workspace = true

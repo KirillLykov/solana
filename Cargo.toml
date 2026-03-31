@@ -56,6 +56,7 @@ members = [
     "net-utils",
     "notifier",
     "perf",
+    "perf-trace",
     "poh",
     "poh-bench",
     "precompiles",
@@ -180,6 +181,7 @@ agave-io-uring = { path = "io-uring", version = "=4.5.0-alpha.0", features = ["a
 agave-jemalloc = { path = "jemalloc", version = "=4.5.0-alpha.0", features = ["agave-unstable-api"] }
 agave-logger = { path = "logger", version = "=4.5.0-alpha.0", features = ["agave-unstable-api"] }
 agave-math-utils = { path = "math-utils", version = "=4.5.0-alpha.0", features = ["agave-unstable-api"] }
+agave-perf-trace = { path = "perf-trace", version = "=4.5.0-alpha.0", features = ["agave-unstable-api"] }
 agave-precompiles = { path = "precompiles", version = "=4.5.0-alpha.0", features = ["agave-unstable-api"] }
 agave-random = { path = "random", version = "=4.5.0-alpha.0", features = ["agave-unstable-api"] }
 agave-reserved-account-keys = { path = "reserved-account-keys", version = "=4.5.0-alpha.0", features = ["agave-unstable-api"] }
@@ -332,6 +334,7 @@ shaq = { version = "4.4.0" }
 shuttle = "0.9.3"
 signal-hook = "0.4.4"
 slab = "0.4.12"
+slowlana-trace = { git = "https://github.com/alessandrod/slowlana-trace.git" }
 slotmap = "1.0.7"
 smallvec = { version = "1.16.1", default-features = false, features = ["union"] }
 smpl_jwt = "0.9.0"

@@ -257,6 +257,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agave-perf-trace"
+version = "4.5.0-alpha.0"
+dependencies = [
+ "libc",
+ "log",
+ "slowlana-trace",
+]
+
+[[package]]
 name = "agave-precompiles"
 version = "4.5.0-alpha.0"
 dependencies = [
@@ -321,7 +330,7 @@ dependencies = [
  "libc",
  "nix",
  "rts-alloc",
- "shaq",
+ "shaq 4.4.0",
  "thiserror 2.0.20",
 ]
 
@@ -6646,6 +6655,16 @@ dependencies = [
 
 [[package]]
 name = "shaq"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c34483a45b522d9b15cc1031536718acb3f2d94f7bc09d7156a3e8d173dfdffe"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "shaq"
 version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2696ba36f1bbe6f719fbccf44344859cfbfba8ac4a198ac1de11491b417683a"
@@ -6842,6 +6861,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
 dependencies = [
  "version_check",
+]
+
+[[package]]
+name = "slowlana-trace"
+version = "0.1.0"
+source = "git+https://github.com/alessandrod/slowlana-trace.git#08b42266b1fe2a13af2de88f487a6693dd95e739"
+dependencies = [
+ "libc",
+ "shaq 2.0.0",
 ]
 
 [[package]]
@@ -7988,7 +8016,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serial_test",
- "shaq",
+ "shaq 4.4.0",
  "signal-hook",
  "slab",
  "smallvec",
