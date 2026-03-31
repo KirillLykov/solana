@@ -1,4 +1,6 @@
 use {
+    crate::trace::trace_poh_slot,
+    agave_perf_trace::{EventsProducer, PohSlotTag},
     crossbeam_channel::{Receiver, SendError, Sender, TryRecvError},
     solana_clock::Slot,
     solana_runtime::{bank::Bank, installed_scheduler_pool::BankWithScheduler},
@@ -26,6 +28,7 @@ pub struct PohController {
     /// This is necessary because crossbeam does not support peeking the
     /// channel.
     pending_message: Arc<AtomicUsize>,
+    trace: Option<EventsProducer>,
 }
 
 impl PohController {
@@ -41,6 +44,13 @@ impl PohController {
             Self {
                 sender,
                 pending_message,
+                trace: match EventsProducer::join() {
+                    Ok(producer) => producer,
+                    Err(err) => {
+                        log::warn!("failed to initialize poh controller trace producer: {err}");
+                        None
+                    }
+                },
             },
             receiver,
         )
@@ -103,6 +113,23 @@ impl PohController {
         &mut self,
         message: PohServiceMessage,
     ) -> Result<(), SendError<PohServiceMessage>> {
+        match &message {
+            PohServiceMessage::SetBank { bank } => {
+                trace_poh_slot(
+                    self.trace.as_ref(),
+                    bank.slot(),
+                    PohSlotTag::ControllerSetBank,
+                );
+            }
+            PohServiceMessage::Reset { reset_bank, .. } => {
+                trace_poh_slot(
+                    self.trace.as_ref(),
+                    reset_bank.slot(),
+                    PohSlotTag::ControllerReset,
+                );
+            }
+        }
+
         self.pending_message.fetch_add(1, Ordering::AcqRel);
         self.sender.send(message)?;
 

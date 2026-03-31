@@ -4,6 +4,7 @@ pub mod poh_controller;
 pub mod poh_recorder;
 pub mod poh_service;
 pub mod record_channels;
+mod trace;
 pub mod transaction_recorder;
 
 #[macro_use]
