@@ -16,7 +16,9 @@ use {
                 ServeRepair, ShredRepairType,
             },
         },
+        trace::trace_repair_stats,
     },
+    agave_perf_trace::EventsProducer,
     agave_votor_messages::{
         VerifiedVotorSlotsMessage, VoteAccountPubkeys, migration::MigrationStatus,
     },
@@ -600,6 +602,7 @@ struct RepairTracker {
     // Maps a repair that may still be outstanding to the timestamp it was requested.
     outstanding_repairs: HashMap<ShredRepairType, u64>,
     repair_eligibility: RepairEligibility,
+    events_trace: Option<EventsProducer>,
 }
 
 pub struct RepairService {
@@ -622,6 +625,13 @@ impl RepairService {
             let blockstore = blockstore.clone();
             let exit = exit.clone();
             let repair_info = repair_info.clone();
+            let events_trace = match EventsProducer::join() {
+                Ok(producer) => producer,
+                Err(err) => {
+                    warn!("failed to initialize repair trace producer: {err}");
+                    None
+                }
+            };
             Builder::new()
                 .name("solRepairSvc".to_string())
                 .spawn(move || {
@@ -633,6 +643,7 @@ impl RepairService {
                         repair_info,
                         &outstanding_requests,
                         xdp_sender,
+                        events_trace,
                     )
                 })
                 .unwrap()
@@ -814,6 +825,7 @@ impl RepairService {
         repair_socket: &UdpSocket,
         xdp_sender: Option<&PinnedXdpSender>,
         repair_metrics: &mut RepairMetrics,
+        events_trace: Option<&EventsProducer>,
     ) {
         let mut build_batch_us = Measure::start("build_batch_us");
         let batch: Vec<(Vec<u8>, SocketAddr)> = {
@@ -839,6 +851,7 @@ impl RepairService {
         let mut send_batch_us = Measure::start("send_batch_us");
         if !batch.is_empty() {
             let num_pkts = batch.len();
+            trace_repair_stats(events_trace, num_pkts);
             if let Some(xdp) = xdp_sender {
                 for (i, (bytes, addr)) in batch.into_iter().enumerate() {
                     if let Err(e) = xdp.try_send(i, addr, Bytes::from(bytes)) {
@@ -886,6 +899,7 @@ impl RepairService {
             popular_pruned_forks_requests,
             outstanding_repairs,
             repair_eligibility,
+            events_trace,
         } = repair_tracker;
         let root_bank = sharable_banks.root();
 
@@ -930,6 +944,7 @@ impl RepairService {
             repair_socket,
             xdp_sender,
             repair_metrics,
+            events_trace.as_ref(),
         );
     }
 
@@ -941,6 +956,7 @@ impl RepairService {
         repair_info: RepairInfo,
         outstanding_requests: &RwLock<OutstandingShredRepairs>,
         xdp_sender: Option<PinnedXdpSender>,
+        events_trace: Option<EventsProducer>,
     ) {
         let (sharable_banks, migration_status) = {
             let bank_forks_r = repair_info.bank_forks.read().unwrap();
@@ -967,6 +983,7 @@ impl RepairService {
             popular_pruned_forks_requests: HashSet::new(),
             outstanding_repairs: HashMap::new(),
             repair_eligibility: RepairEligibility::default(),
+            events_trace,
         };
 
         let mut pinnable_slice = blockstore.new_pinnable_slice();

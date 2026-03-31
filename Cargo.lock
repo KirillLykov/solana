@@ -9009,6 +9009,7 @@ version = "4.5.0-alpha.0"
 dependencies = [
  "agave-feature-set",
  "agave-logger",
+ "agave-perf-trace",
  "agave-reserved-account-keys",
  "agave-snapshots",
  "agave-transaction-view",
@@ -11498,6 +11499,7 @@ version = "4.5.0-alpha.0"
 dependencies = [
  "agave-feature-set",
  "agave-logger",
+ "agave-perf-trace",
  "agave-votor",
  "agave-votor-messages",
  "agave-wake-channel",

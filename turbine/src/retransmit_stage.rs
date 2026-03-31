@@ -7,7 +7,9 @@ use {
             ClusterNodes, ClusterNodesCache, DATA_PLANE_FANOUT, Error, MAX_NUM_TURBINE_HOPS,
         },
         retransmit_stage::worker_pool::{WorkerJob, WorkerPool},
+        trace::trace_retransmit_stats,
     },
+    agave_perf_trace::EventsProducer,
     agave_votor::event::VotorEvent,
     agave_votor_messages::migration::MigrationStatus,
     crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError},
@@ -111,6 +113,7 @@ struct RetransmitStats {
     compute_turbine_peers_total: AtomicU64,
     slot_stats: LruCache<Slot, RetransmitSlotStats>,
     unknown_shred_slot_leader: usize,
+    events_trace: Option<EventsProducer>,
 }
 
 struct RetransmitState {
@@ -166,6 +169,11 @@ impl RetransmitStats {
         if self.since.elapsed() < SUBMIT_CADENCE {
             return;
         }
+        trace_retransmit_stats(
+            self.events_trace.as_ref(),
+            self.num_nodes.load(Ordering::Relaxed),
+            self.num_shreds,
+        );
         cluster_nodes_cache
             .get(root_bank.slot(), root_bank, working_bank, cluster_info)
             .submit_metrics("cluster_nodes_retransmit", timestamp());
@@ -776,6 +784,13 @@ impl RetransmitStats {
     const SLOT_STATS_CACHE_CAPACITY: usize = 750;
 
     fn new(now: Instant) -> Self {
+        let events_trace = match EventsProducer::join() {
+            Ok(producer) => producer,
+            Err(err) => {
+                log::warn!("failed to initialize retransmit trace producer: {err}");
+                None
+            }
+        };
         Self {
             since: now,
             num_nodes: AtomicUsize::default(),
@@ -794,6 +809,7 @@ impl RetransmitStats {
             // Cache capacity is manually enforced by `SLOT_STATS_CACHE_CAPACITY`
             slot_stats: LruCache::<Slot, RetransmitSlotStats>::unbounded(),
             unknown_shred_slot_leader: 0usize,
+            events_trace,
         }
     }
 

@@ -6,6 +6,7 @@ pub mod broadcast_stage;
 pub mod cluster_nodes;
 
 pub mod retransmit_stage;
+mod trace;
 
 pub mod sigverify_shreds;
 
