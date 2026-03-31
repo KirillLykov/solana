@@ -9,6 +9,7 @@ pub mod nonce_info;
 pub mod program_loader;
 pub mod rent_calculator;
 pub mod rollback_accounts;
+mod trace;
 pub mod transaction_account_state_info;
 pub mod transaction_balances;
 pub mod transaction_commit_result;

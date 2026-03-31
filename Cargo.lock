@@ -10208,6 +10208,7 @@ dependencies = [
  "agave-feature-set",
  "agave-fs",
  "agave-logger",
+ "agave-perf-trace",
  "agave-precompiles",
  "agave-reserved-account-keys",
  "agave-snapshots",
@@ -10874,6 +10875,7 @@ name = "solana-svm"
 version = "4.5.0-alpha.0"
 dependencies = [
  "agave-feature-set",
+ "agave-perf-trace",
  "agave-precompiles",
  "ahash 0.8.12",
  "assert_matches",

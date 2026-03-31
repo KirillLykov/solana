@@ -66,6 +66,7 @@ svm-internal = ["dep:qualifier_attr"]
 
 [dependencies]
 agave-feature-set = { workspace = true, optional = true }
+agave-perf-trace = { workspace = true }
 agave-precompiles = { workspace = true, optional = true }
 ahash = { workspace = true }
 log = { workspace = true }

@@ -10,6 +10,7 @@ use {
         nonce_info::NonceInfo,
         program_loader::{filter_executable_program_accounts, load_program_with_pubkey},
         rollback_accounts::RollbackAccounts,
+        trace::trace_svm_transaction,
         transaction_account_state_info::{
             TransactionAccountStateInfo, get_uninitialized_accounts_size, verify_changes,
         },
@@ -20,6 +21,7 @@ use {
         },
         transaction_processing_result::{ProcessedTransaction, TransactionProcessingResult},
     },
+    agave_perf_trace::{SvmProducer, timestamp},
     log::debug,
     solana_account::{AccountSharedData, ReadableAccount, state_traits::StateMutWincode as _},
     solana_clock::{Epoch, Slot},
@@ -237,6 +239,7 @@ pub struct TransactionBatchProcessor<FG: ForkGraph> {
     builtin_program_cache: RwLock<ProgramCacheForTxBatch>,
 
     execution_cost: SVMTransactionExecutionCost,
+    svm_trace: Option<Arc<SvmProducer>>,
 }
 
 impl<FG: ForkGraph> Debug for TransactionBatchProcessor<FG> {
@@ -253,6 +256,7 @@ impl<FG: ForkGraph> Debug for TransactionBatchProcessor<FG> {
 impl<FG: ForkGraph> Default for TransactionBatchProcessor<FG> {
     fn default() -> Self {
         Self {
+            svm_trace: None,
             slot: Slot::default(),
             epoch: Epoch::default(),
             sysvar_cache: RwLock::<SysvarCache>::default(),
@@ -396,7 +400,12 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
             builtin_program_ids: RwLock::new(builtin_program_ids),
             builtin_program_cache: RwLock::new(builtin_program_cache),
             execution_cost: self.execution_cost,
+            svm_trace: self.svm_trace.clone(),
         }
+    }
+
+    pub fn set_svm_trace(&mut self, svm_trace: Option<Arc<SvmProducer>>) {
+        self.svm_trace = svm_trace;
     }
 
     /// Sets the base execution cost for the transactions that this instance of transaction processor
@@ -521,6 +530,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
         // in the same batch may modify the same accounts. Transaction order is
         // preserved within entries written to the ledger.
         for (tx, check_result) in sanitized_txs.iter().zip(check_results) {
+            let start = timestamp();
             let (validate_result, validate_fees_us) = measure_us!(match check_result {
                 Ok(tx_details) => Self::validate_transaction_nonce_and_fee_payer(
                     &mut account_loader,
@@ -711,6 +721,14 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
             }
 
             processing_results.push(processing_result);
+            let end = timestamp();
+
+            trace_svm_transaction(
+                self.svm_trace.as_deref(),
+                *tx.signature().as_array(),
+                start,
+                end,
+            );
         }
 
         // Skip eviction when there's no chance this particular tx batch has increased the size of
