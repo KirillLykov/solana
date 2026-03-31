@@ -1,7 +1,6 @@
 use {
-    super::receive_and_buffer::{PrecheckResult, precheck_transaction},
+    super::receive_and_buffer::{PrecheckResult, PrecheckWork, precheck_transaction},
     crossbeam_channel::{Receiver, Sender},
-    solana_perf::packet::bytes::Bytes,
     solana_pubkey::Pubkey,
     solana_runtime::bank_forks::SharableBanks,
     std::{
@@ -14,7 +13,7 @@ use {
 
 pub(crate) fn spawn_check_workers(
     num_workers: NonZeroUsize,
-    work_receiver: Receiver<Bytes>,
+    work_receiver: Receiver<PrecheckWork>,
     result_sender: Sender<PrecheckResult>,
     sharable_banks: SharableBanks,
     filter_keys: Arc<HashSet<Pubkey>>,
@@ -36,15 +35,20 @@ pub(crate) fn spawn_check_workers(
 }
 
 fn run_check_worker(
-    work_receiver: Receiver<Bytes>,
+    work_receiver: Receiver<PrecheckWork>,
     result_sender: Sender<PrecheckResult>,
     sharable_banks: SharableBanks,
     filter_keys: Arc<HashSet<Pubkey>>,
 ) {
-    while let Ok(bytes) = work_receiver.recv() {
+    while let Ok(PrecheckWork { bytes, flow_id }) = work_receiver.recv() {
         let banks = sharable_banks.load();
-        let result =
-            precheck_transaction(bytes, &banks.root_bank, &banks.working_bank, &filter_keys);
+        let result = precheck_transaction(
+            bytes,
+            flow_id,
+            &banks.root_bank,
+            &banks.working_bank,
+            &filter_keys,
+        );
 
         // A result queue at capacity applies backpressure to check workers. Accepted
         // work is never dropped by a worker.
@@ -73,20 +77,21 @@ mod tests {
         (bank_forks.read().unwrap().sharable_banks(), mint_keypair)
     }
 
-    fn transaction_bytes(
+    fn transaction_work(
         sharable_banks: &SharableBanks,
         mint_keypair: &solana_keypair::Keypair,
-    ) -> Bytes {
+    ) -> PrecheckWork {
         let transaction = transfer(
             mint_keypair,
             &Pubkey::new_unique(),
             1,
             sharable_banks.working().last_blockhash(),
         );
-        BytesPacket::from_data(transaction)
+        let bytes = BytesPacket::from_data(transaction)
             .unwrap()
             .buffer()
-            .clone()
+            .clone();
+        PrecheckWork { bytes, flow_id: 0 }
     }
 
     #[test]
@@ -103,7 +108,7 @@ mod tests {
         );
         for _ in 0..8 {
             work_sender
-                .send(transaction_bytes(&sharable_banks, &mint_keypair))
+                .send(transaction_work(&sharable_banks, &mint_keypair))
                 .unwrap();
         }
 

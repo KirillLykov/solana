@@ -19,6 +19,7 @@ use {
         validator::BlockProductionMethod,
     },
     agave_banking_stage_ingress_types::{BankingPacketReceiver, SchedulerPriorityFloor},
+    agave_perf_trace::{EventsProducer, TxProducer},
     agave_votor::slot_clock::SharedAlpenglowSlotClock,
     crossbeam_channel::{Receiver, Sender, bounded},
     futures::{StreamExt, stream::FuturesUnordered},
@@ -522,6 +523,27 @@ impl BankingStage {
         // Setup receive & buffer.
         let sharable_banks = self.bank_forks.read().unwrap().sharable_banks();
         let priority_floor = self.priority_floor.clone();
+        let receive_and_buffer_tx_trace = match TxProducer::join() {
+            Ok(producer) => producer,
+            Err(err) => {
+                warn!("failed to initialize buffered transaction trace producer: {err}");
+                None
+            }
+        };
+        let scheduler_tx_trace = match TxProducer::join() {
+            Ok(producer) => producer,
+            Err(err) => {
+                warn!("failed to initialize scheduler transaction trace producer: {err}");
+                None
+            }
+        };
+        let scheduler_events_trace = match EventsProducer::join() {
+            Ok(producer) => producer,
+            Err(err) => {
+                warn!("failed to initialize scheduler event trace producer: {err}");
+                None
+            }
+        };
         let (check_work_sender, check_work_receiver) = bounded(CHANNEL_CAPACITY);
         let (check_result_sender, check_result_receiver) = bounded(CHANNEL_CAPACITY);
         let check_worker_handles = spawn_check_workers(
@@ -535,6 +557,7 @@ impl BankingStage {
             self.non_vote_receiver.clone(),
             check_work_sender,
             check_result_receiver,
+            receive_and_buffer_tx_trace,
         );
 
         // Spawn vote worker.
@@ -584,6 +607,7 @@ impl BankingStage {
             work_senders,
             finished_work_receiver,
             GreedySchedulerConfig::default(),
+            scheduler_tx_trace,
         );
         let exit = exit.clone();
         let shutdown_signal = self.banking_shutdown_signal.clone();
@@ -600,6 +624,7 @@ impl BankingStage {
                         scheduler,
                         worker_metrics,
                         priority_floor,
+                        scheduler_events_trace,
                     );
 
                     match scheduler_controller.run() {

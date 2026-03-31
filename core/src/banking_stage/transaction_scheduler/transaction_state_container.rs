@@ -295,8 +295,13 @@ impl<Tx: StaticTransactionWithMeta> TransactionStateContainer<Tx> {
         priority: u64,
         cost: u64,
     ) -> bool {
-        let priority_id =
-            self.insert_map_only(TransactionState::new(transaction, max_age, priority, cost));
+        let priority_id = self.insert_map_only(TransactionState::new(
+            transaction,
+            max_age,
+            priority,
+            cost,
+            0,
+        ));
 
         self.push_ids_into_queue(std::iter::once(priority_id)) > 0
     }
@@ -414,6 +419,7 @@ mod tests {
                 max_age,
                 priority,
                 cost,
+                0,
             ));
             container.push_ids_into_queue(std::iter::once(priority_id));
             priority_ids.push(priority_id);
@@ -423,8 +429,13 @@ mod tests {
         container.remove_by_id(removed.id);
 
         let (transaction, max_age, priority, cost) = test_transaction(1);
-        let priority_id =
-            container.insert_map_only(TransactionState::new(transaction, max_age, priority, cost));
+        let priority_id = container.insert_map_only(TransactionState::new(
+            transaction,
+            max_age,
+            priority,
+            cost,
+            0,
+        ));
         assert_eq!(priority_id.id, removed.id);
         container.push_ids_into_queue(std::iter::once(priority_id));
 
@@ -444,6 +455,7 @@ mod tests {
                 max_age,
                 priority,
                 cost,
+                0,
             ));
             assert_eq!(
                 container.push_ids_into_queue(std::iter::once(priority_id)),
@@ -494,7 +506,7 @@ mod tests {
             )
             .unwrap();
 
-            TransactionState::new(view, MaxAge::MAX, priority, cost)
+            TransactionState::new(view, MaxAge::MAX, priority, cost, 0)
         };
 
         // Push 2 transactions into the queue so buffer is full.

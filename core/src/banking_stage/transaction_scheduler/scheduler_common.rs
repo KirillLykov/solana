@@ -3,12 +3,16 @@ use {
         in_flight_tracker::InFlightTracker, scheduler_error::SchedulerError,
         transaction_state_container::StateContainer,
     },
-    crate::banking_stage::{
-        consumer::ENTRY_OVERHEAD_BYTES,
-        scheduler_messages::{
-            ConsumeWork, FinishedConsumeWork, MaxAge, TransactionBatchId, TransactionId,
+    crate::{
+        banking_stage::{
+            consumer::ENTRY_OVERHEAD_BYTES,
+            scheduler_messages::{
+                ConsumeWork, FinishedConsumeWork, MaxAge, TransactionBatchId, TransactionId,
+            },
         },
+        trace::trace_transaction_state,
     },
+    agave_perf_trace::{TransactionState, TxProducer, timestamp},
     agave_scheduling_utils::thread_aware_account_locks::{
         MAX_THREADS, ThreadAwareAccountLocks, ThreadId, ThreadSet,
     },
@@ -169,6 +173,7 @@ pub(crate) struct SchedulingCommon<Tx> {
     pub(crate) in_flight_tracker: InFlightTracker,
     pub(crate) account_locks: ThreadAwareAccountLocks,
     pub(crate) batches: Batches<Tx>,
+    pub(crate) tx_trace: Option<TxProducer>,
 }
 
 impl<Tx> SchedulingCommon<Tx> {
@@ -176,6 +181,7 @@ impl<Tx> SchedulingCommon<Tx> {
         consume_work_senders: Vec<Sender<ConsumeWork<Tx>>>,
         finished_consume_work_receiver: Receiver<FinishedConsumeWork<Tx>>,
         target_num_transactions_per_batch: usize,
+        tx_trace: Option<TxProducer>,
     ) -> Self {
         let num_threads = consume_work_senders.len();
         assert!(num_threads > 0, "must have at least one worker");
@@ -192,6 +198,7 @@ impl<Tx> SchedulingCommon<Tx> {
             finished_consume_work_receiver,
             in_flight_tracker: InFlightTracker::new(num_threads),
             account_locks: ThreadAwareAccountLocks::new(num_threads),
+            tx_trace,
         }
     }
 
@@ -272,6 +279,22 @@ impl<Tx: TransactionWithMeta> SchedulingCommon<Tx> {
                         );
                         retryable_iter.next();
                         continue;
+                    }
+                    let flow_id = container
+                        .get_mut_transaction_state(id)
+                        .map(|transaction_state| transaction_state.flow_id())
+                        .unwrap_or(0);
+                    if flow_id != 0 {
+                        trace_transaction_state(
+                            self.tx_trace.as_ref(),
+                            flow_id,
+                            *transaction
+                                .as_sanitized_transaction()
+                                .signature()
+                                .as_array(),
+                            timestamp(),
+                            TransactionState::Executed,
+                        );
                     }
                     container.remove_by_id(id);
                 }
@@ -489,7 +512,7 @@ mod tests {
         let (work_senders, work_receivers): (Vec<Sender<_>>, Vec<Receiver<_>>) =
             (0..NUM_WORKERS).map(|_| bounded(1024)).unzip();
         let (_finished_work_sender, finished_work_receiver) = bounded(1024);
-        let mut common = SchedulingCommon::new(work_senders, finished_work_receiver, 10);
+        let mut common = SchedulingCommon::new(work_senders, finished_work_receiver, 10, None);
         assert_eq!(
             common.batches.entry_bytes(),
             vec![ENTRY_OVERHEAD_BYTES; NUM_WORKERS]
@@ -544,7 +567,7 @@ mod tests {
         let (work_senders, work_receivers): (Vec<Sender<_>>, Vec<Receiver<_>>) =
             (0..NUM_WORKERS).map(|_| bounded(1024)).unzip();
         let (finished_work_sender, finished_work_receiver) = bounded(1024);
-        let mut common = SchedulingCommon::new(work_senders, finished_work_receiver, 10);
+        let mut common = SchedulingCommon::new(work_senders, finished_work_receiver, 10, None);
 
         // Send a batch. Return completed work.
         pop_and_add_transaction(&mut container, &mut common, 0);
@@ -599,7 +622,7 @@ mod tests {
         let (work_senders, work_receivers): (Vec<Sender<_>>, Vec<Receiver<_>>) =
             (0..NUM_WORKERS).map(|_| bounded(1024)).unzip();
         let (finished_work_sender, finished_work_receiver) = bounded(1024);
-        let mut common = SchedulingCommon::new(work_senders, finished_work_receiver, 10);
+        let mut common = SchedulingCommon::new(work_senders, finished_work_receiver, 10, None);
         // Retryable indexes out-of-order.
         add_transactions_to_container(&mut container, 2);
         pop_and_add_transaction(&mut container, &mut common, 0);

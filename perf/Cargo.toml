@@ -40,6 +40,7 @@ stable-abi = [
 ]
 
 [dependencies]
+agave-perf-trace = { workspace = true }
 agave-transaction-view = { workspace = true }
 ahash = { workspace = true }
 arc-swap = { workspace = true }

@@ -1,9 +1,11 @@
 //! Utility to deduplicate batches of incoming network packets.
 
 use {
-    crate::packet::PacketBatch,
+    crate::{get_signature_from_packet_mut, packet::PacketBatch, trace::trace_deduped_transaction},
+    agave_perf_trace::TxProducer,
     ahash::RandomState,
     arc_swap::ArcSwap,
+    log::warn,
     rand::Rng,
     std::{
         hash::Hash,
@@ -23,6 +25,7 @@ pub struct Deduper<const K: usize, T: ?Sized> {
     state: ArcSwap<DeduperGeneration<K>>,
     popcount: AtomicU64, // Number of one bits in self.bits.
     reset_guard: Mutex<()>,
+    tx_trace: Option<TxProducer>,
     _phantom: PhantomData<T>,
 }
 
@@ -44,12 +47,20 @@ impl<const K: usize, T: ?Sized + Hash> Deduper<K, T> {
     pub fn new<R: Rng>(rng: &mut R, num_bits: u64) -> Self {
         let size = num_bits.checked_add(63).unwrap() / 64;
         let size = usize::try_from(size).unwrap();
+        let tx_trace = match TxProducer::join() {
+            Ok(producer) => producer,
+            Err(err) => {
+                warn!("failed to initialize deduper trace producer: {err}");
+                None
+            }
+        };
         Self {
             num_bits,
             state: ArcSwap::from_pointee(DeduperGeneration::new(rng)),
             bits: repeat_with(AtomicU64::default).take(size).collect(),
             popcount: AtomicU64::default(),
             reset_guard: Mutex::default(),
+            tx_trace,
             _phantom: PhantomData::<T>,
         }
     }
@@ -137,6 +148,9 @@ pub fn dedup_packets_and_count_discards<const K: usize>(
                     .unwrap_or(true)
             {
                 packet.meta_mut().set_discard(true);
+                if let Ok(sig) = get_signature_from_packet_mut(&packet) {
+                    trace_deduped_transaction(deduper.tx_trace.as_ref(), packet.flow_id(), *sig);
+                }
             }
             u64::from(packet.meta().discard())
         })

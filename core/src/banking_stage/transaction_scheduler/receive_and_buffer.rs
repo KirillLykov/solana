@@ -10,9 +10,11 @@ use {
             consumer::Consumer, decision_maker::BufferedPacketsDecision, packet_bytes,
             scheduler_messages::MaxAge,
         },
+        trace::trace_transaction_state,
         transaction_priority::calculate_priority_and_cost,
     },
     agave_banking_stage_ingress_types::{BankingPacketBatch, BankingPacketReceiver},
+    agave_perf_trace::{TransactionState as TraceTransactionState, TxProducer, timestamp},
     agave_transaction_view::{
         resolved_transaction_view::ResolvedTransactionView, sanitize::SanitizeConfig,
         transaction_data::TransactionData, transaction_version::TransactionVersion,
@@ -24,7 +26,7 @@ use {
     solana_address_lookup_table_interface::state::estimate_last_valid_slot,
     solana_clock::{Epoch, Slot},
     solana_message::v0::LoadedAddresses,
-    solana_perf::packet::bytes::Bytes,
+    solana_perf::{get_signature_from_packet, packet::bytes::Bytes},
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
     solana_runtime_transaction::{
@@ -61,8 +63,14 @@ pub(crate) struct PrecheckedTransaction {
 
 pub(crate) type PrecheckResult = Result<PrecheckedTransaction, IngressCheckError>;
 
+pub(crate) struct PrecheckWork {
+    pub(crate) bytes: Bytes,
+    pub(crate) flow_id: u64,
+}
+
 pub(crate) fn precheck_transaction(
     bytes: Bytes,
+    flow_id: u64,
     root_bank: &Bank,
     working_bank: &Bank,
     filter_keys: &HashSet<Pubkey>,
@@ -94,7 +102,7 @@ pub(crate) fn precheck_transaction(
     let max_age = calculate_max_age(root_bank.epoch(), deactivation_slot, root_bank.slot());
     let (priority, cost) =
         calculate_priority_and_cost(working_bank, &view, &transaction_configuration);
-    let state = TransactionState::new(view, max_age, priority, cost);
+    let state = TransactionState::new(view, max_age, priority, cost, flow_id);
 
     let mut error_counters = TransactionErrorMetrics::default();
     let validated_nonce_address = working_bank
@@ -315,20 +323,23 @@ pub(crate) trait ReceiveAndBuffer {
 
 pub(crate) struct TransactionViewReceiveAndBuffer {
     receiver: BankingPacketReceiver,
-    check_work_sender: Sender<Bytes>,
+    check_work_sender: Sender<PrecheckWork>,
     check_result_receiver: Receiver<PrecheckResult>,
+    tx_trace: Option<TxProducer>,
 }
 
 impl TransactionViewReceiveAndBuffer {
     pub(crate) fn new(
         receiver: BankingPacketReceiver,
-        check_work_sender: Sender<Bytes>,
+        check_work_sender: Sender<PrecheckWork>,
         check_result_receiver: Receiver<PrecheckResult>,
+        tx_trace: Option<TxProducer>,
     ) -> Self {
         Self {
             receiver,
             check_work_sender,
             check_result_receiver,
+            tx_trace,
         }
     }
 }
@@ -461,7 +472,20 @@ impl TransactionViewReceiveAndBuffer {
                 continue;
             }
 
-            let work = packet_bytes(packet, packet_data);
+            if let Ok(signature) = get_signature_from_packet(&packet) {
+                trace_transaction_state(
+                    self.tx_trace.as_ref(),
+                    packet.flow_id(),
+                    *signature,
+                    timestamp(),
+                    TraceTransactionState::Buffered,
+                );
+            }
+
+            let work = PrecheckWork {
+                bytes: packet_bytes(packet, packet_data),
+                flow_id: packet.flow_id(),
+            };
             match self.check_work_sender.try_send(work) {
                 Ok(()) => {}
                 Err(TrySendError::Full(_)) => {
@@ -639,7 +663,7 @@ mod tests {
         let PrecheckedTransaction {
             state,
             validated_nonce_address,
-        } = precheck_transaction(bytes, &bank, &bank, &HashSet::new()).unwrap();
+        } = precheck_transaction(bytes, 0, &bank, &bank, &HashSet::new()).unwrap();
 
         assert_runtime_view(state.transaction());
         assert_eq!(state.transaction().data().as_ptr(), bytes_ptr);
@@ -685,6 +709,7 @@ mod tests {
             receiver,
             check_work_sender,
             check_result_receiver,
+            None,
         );
         let container = TransactionViewStateContainer::with_capacity(TEST_CONTAINER_CAPACITY);
         (receive_and_buffer, container)
@@ -787,12 +812,18 @@ mod tests {
             .send(to_single_banking_packet_batch(&Transaction::default()))
             .unwrap();
         let (work_sender, _work_receiver) = bounded(1);
-        work_sender.send(Bytes::new()).unwrap();
+        work_sender
+            .send(PrecheckWork {
+                bytes: Bytes::new(),
+                flow_id: 0,
+            })
+            .unwrap();
         let (_result_sender, result_receiver) = bounded(1);
         let mut receive_and_buffer = TransactionViewReceiveAndBuffer {
             receiver,
             check_work_sender: work_sender,
             check_result_receiver: result_receiver,
+            tx_trace: None,
         };
         let mut container = TransactionViewStateContainer::with_capacity(1);
 
@@ -819,6 +850,7 @@ mod tests {
             receiver,
             check_work_sender: work_sender,
             check_result_receiver: result_receiver,
+            tx_trace: None,
         };
         let mut container = TransactionViewStateContainer::with_capacity(1);
 

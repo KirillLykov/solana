@@ -24,11 +24,19 @@ pub(crate) struct TransactionState<Tx> {
     cost: u64,
     /// Nonce address, if this is a validated nonce transaction.
     nonce_address: Option<Pubkey>,
+    /// Trace flow identifier assigned at packet ingress.
+    flow_id: u64,
 }
 
 impl<Tx> TransactionState<Tx> {
     /// Creates a new `TransactionState` in the `Unprocessed` state.
-    pub(crate) fn new(transaction: Tx, max_age: MaxAge, priority: u64, cost: u64) -> Self {
+    pub(crate) fn new(
+        transaction: Tx,
+        max_age: MaxAge,
+        priority: u64,
+        cost: u64,
+        flow_id: u64,
+    ) -> Self {
         Self {
             transaction: Some(transaction),
             max_age,
@@ -36,6 +44,7 @@ impl<Tx> TransactionState<Tx> {
             arrival_order: 0,
             cost,
             nonce_address: None,
+            flow_id,
         }
     }
 
@@ -62,6 +71,10 @@ impl<Tx> TransactionState<Tx> {
     /// Return the nonce address of the transaction, if one exists.
     pub(crate) fn nonce_address(&self) -> Option<&Pubkey> {
         self.nonce_address.as_ref()
+    }
+
+    pub(crate) fn flow_id(&self) -> u64 {
+        self.flow_id
     }
 
     /// Intended to be called when a transaction is scheduled. This method
@@ -137,6 +150,7 @@ mod tests {
             MaxAge::MAX,
             compute_unit_price,
             TEST_TRANSACTION_COST,
+            0,
         )
     }
 

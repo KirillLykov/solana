@@ -6388,6 +6388,7 @@ dependencies = [
  "agave-jemalloc",
  "agave-logger",
  "agave-math-utils",
+ "agave-perf-trace",
  "agave-scheduler-bindings",
  "agave-scheduler-handshake",
  "agave-scheduling-utils",
@@ -7431,6 +7432,7 @@ dependencies = [
 name = "solana-perf"
 version = "4.5.0-alpha.0"
 dependencies = [
+ "agave-perf-trace",
  "agave-transaction-view",
  "ahash 0.8.12",
  "arc-swap",
@@ -8485,6 +8487,8 @@ dependencies = [
 name = "solana-streamer"
 version = "4.5.0-alpha.0"
 dependencies = [
+ "agave-perf-trace",
+ "agave-xdp",
  "bytes",
  "crossbeam-channel",
  "futures 0.3.34",

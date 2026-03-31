@@ -6,7 +6,9 @@ use {
         },
         quic::{QuicServerError, QuicStreamerConfig, StreamerStats, configure_server},
         streamer::StakedNodes,
+        trace::trace_received_transaction,
     },
+    agave_perf_trace::{TxProducer, timestamp},
     bytes::{BufMut, Bytes, BytesMut},
     crossbeam_channel::{Sender, TrySendError},
     futures::{Future, StreamExt as _, stream::FuturesUnordered},
@@ -116,6 +118,7 @@ struct PacketAccumulator {
     // retained as datagram slices. See `PacketAccumulator::push`.
     coalesced: Option<BytesMut>,
     pub start_time: Instant,
+    pub ts: u64,
 }
 
 impl PacketAccumulator {
@@ -125,6 +128,7 @@ impl PacketAccumulator {
             chunks: SmallVec::default(),
             coalesced: None,
             start_time: Instant::now(),
+            ts: timestamp(),
         }
     }
 
@@ -183,6 +187,7 @@ pub(crate) fn spawn_server<Q, C>(
     quic_server_params: QuicStreamerConfig,
     qos: Q,
     cancel: CancellationToken,
+    tx_trace: Option<Arc<TxProducer>>,
 ) -> Result<SpawnNonBlockingServerResult, QuicServerError>
 where
     Q: QosController<C> + Send + Sync + 'static,
@@ -210,6 +215,7 @@ where
             quic_server_params,
             cancel,
             qos,
+            tx_trace,
         )
     });
 
@@ -275,6 +281,7 @@ async fn run_server<Q, C>(
     quic_server_params: QuicStreamerConfig,
     cancel: CancellationToken,
     qos: Q,
+    tx_trace: Option<Arc<TxProducer>>,
 ) -> ()
 where
     Q: QosController<C> + Send + Sync + 'static,
@@ -411,6 +418,7 @@ where
                         quic_server_params.clone(),
                         qos.clone(),
                         tasks.clone(),
+                        tx_trace.clone(),
                     ));
                 }
                 Err(err) => {
@@ -492,6 +500,7 @@ async fn setup_connection<Q, C>(
     server_params: Arc<QuicStreamerConfig>,
     qos: Arc<Q>,
     tasks: TaskTracker,
+    tx_trace: Option<Arc<TxProducer>>,
 ) where
     Q: QosController<C> + Send + Sync + 'static,
     C: ConnectionContext + Send + Sync + 'static,
@@ -555,6 +564,7 @@ async fn setup_connection<Q, C>(
                         conn_context.clone(),
                         qos,
                         cancel_connection,
+                        tx_trace.clone(),
                     ));
                 }
             }
@@ -607,6 +617,7 @@ fn handle_connection_error(e: quinn::ConnectionError, stats: &StreamerStats, fro
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection<Q, C>(
     packet_sender: Sender<PacketBatch>,
     remote_address: SocketAddr,
@@ -616,6 +627,7 @@ async fn handle_connection<Q, C>(
     context: C,
     qos: Arc<Q>,
     cancel: CancellationToken,
+    tx_trace: Option<Arc<TxProducer>>,
 ) where
     Q: QosController<C> + Send + Sync + 'static,
     C: ConnectionContext + Send + Sync + 'static,
@@ -722,6 +734,7 @@ async fn handle_connection<Q, C>(
                 &stats,
                 peer_type,
                 server_params.max_stream_data_bytes,
+                tx_trace.as_deref(),
             ) {
                 // The stream is finished, break out of the loop and close the stream.
                 Ok(StreamState::Finished) => {
@@ -779,8 +792,14 @@ fn handle_chunks(
     stats: &StreamerStats,
     peer_type: ConnectionPeerType,
     max_stream_data_bytes: u32,
+    tx_trace: Option<&TxProducer>,
 ) -> Result<StreamState, ()> {
     let n_chunks = chunks.len();
+    if accum.chunks.is_empty() && n_chunks > 0 {
+        accum.start_time = Instant::now();
+        accum.ts = timestamp();
+    }
+
     for chunk in chunks {
         accum.meta.size += chunk.len();
         if accum.meta.size > max_stream_data_bytes as usize {
@@ -838,7 +857,7 @@ fn handle_chunks(
     // 14% of them come in multiple chunks. In that case, we copy
     // them into one `Bytes` buffer. We make a copy once, with
     // intention to not do it again.
-    let packet = if accum.chunks.len() == 1 {
+    let mut packet = if accum.chunks.len() == 1 {
         BytesPacket::new(
             accum.chunks.pop().expect("expected one chunk"),
             accum.meta.clone(),
@@ -850,6 +869,14 @@ fn handle_chunks(
         }
         BytesPacket::new(buf.freeze(), accum.meta.clone())
     };
+
+    static FLOW_ID: AtomicU64 = AtomicU64::new(1);
+
+    if let Ok(sig) = solana_perf::get_signature_from_packet(&packet.as_ref()) {
+        let flow_id = FLOW_ID.fetch_add(1, Ordering::Relaxed);
+        trace_received_transaction(tx_trace, flow_id, *sig, accum.ts);
+        packet.set_flow_id(flow_id);
+    }
 
     let packet_size = packet.meta().size;
     let total_latency = accum.start_time.elapsed();
@@ -1754,6 +1781,7 @@ pub mod test {
                 ..Default::default()
             },
             cancel.clone(),
+            None,
         )
         .unwrap();
 
@@ -1790,6 +1818,7 @@ pub mod test {
                 ..Default::default()
             },
             cancel.clone(),
+            None,
         )
         .unwrap();
 
