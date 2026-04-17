@@ -4,28 +4,29 @@
 
 use {
     crate::workers_cache::{WorkerInfo, WorkersCacheInterface},
-    std::net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    std::{
+        iter::repeat_n,
+        net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    },
 };
 
-pub struct ArrayCache<K, V> {
+//TODO(klykov): no need to make it generic
+pub(crate) struct ArrayCache<K, V> {
     entries: Box<[Option<V>]>,
     keys: Box<[K]>,
     order: Box<[u64]>,
     generation: u64,
 }
 
+//TODO(klykov): we need as less complexity as possible. So use concrete types, if we use only
+//SocketAddrV4 -- use only this.
 impl<V> ArrayCache<SocketAddr, V> {
     pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "capacity must be non-zero");
         Self::with_prototype(
             capacity,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         )
-    }
-}
-
-impl<K: Default + Clone + PartialEq, V> ArrayCache<K, V> {
-    pub fn with_default_key(capacity: usize) -> Self {
-        Self::with_prototype(capacity, K::default())
     }
 }
 
@@ -35,14 +36,10 @@ where
 {
     pub fn with_prototype(capacity: usize, prototype: K) -> Self {
         Self {
-            entries: (0..capacity)
-                .map(|_| None)
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-            keys: std::iter::repeat_n(prototype, capacity)
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-            order: vec![0u64; capacity].into_boxed_slice(),
+            // TODO(klykov): no reason to create vector first, and everything should be in one style
+            entries: (0..capacity).map(|_| None).collect(),
+            keys: repeat_n(prototype, capacity).collect(),
+            order: (0..capacity).map(|_| 0u64).collect(),
             generation: 0,
         }
     }
@@ -150,6 +147,9 @@ where
     }
 }
 
+// TODO(klykov): i don't see much value of having some private methods and use them here to
+// implement the trait. I think we can implement trait directly and this implementation should be
+// placed closer to the begging of module, before private methods.
 impl WorkersCacheInterface for ArrayCache<SocketAddr, WorkerInfo> {
     fn contains(&self, key: &SocketAddr) -> bool {
         self.contains(key)
@@ -175,6 +175,12 @@ impl WorkersCacheInterface for ArrayCache<SocketAddr, WorkerInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl<K: Default + Clone + PartialEq, V> ArrayCache<K, V> {
+        pub fn with_default_key(capacity: usize) -> Self {
+            Self::with_prototype(capacity, K::default())
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn array_cache_contains() {

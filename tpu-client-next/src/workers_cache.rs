@@ -23,7 +23,13 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
-pub trait WorkersCacheInterface {
+// TODO(klykov): The order of declaration of structures should be first public structures/functions,
+// later pub(crate) and later private once. So in this case it makes sense to start with
+// WorkersCache since it is the structure user will most probably look for.
+
+// TODO(klykov): shall it be public?
+// TODO(klykov): Bad name of the structure.
+pub(crate) trait WorkersCacheInterface {
     fn contains(&self, key: &SocketAddr) -> bool;
     fn get(&mut self, key: &SocketAddr) -> Option<&WorkerInfo>;
     fn push(&mut self, key: SocketAddr, value: WorkerInfo) -> Option<(SocketAddr, WorkerInfo)>;
@@ -31,10 +37,13 @@ pub trait WorkersCacheInterface {
     fn pop_next(&mut self) -> Option<(SocketAddr, WorkerInfo)>;
 }
 
+// TODO(klykov): the name is not good, it should be something like Option, cause Strategy has
+// meaning of action.
 /// [`WorkersCacheStrategy`] strategy for caching connection workers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkersCacheStrategy {
     Lru,
+    // TODO(klykov): bad name of the enum variant
     SimpleCache,
 }
 
