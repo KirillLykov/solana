@@ -500,7 +500,7 @@ mod tests {
         stage.join().unwrap();
     }
 
-    #[test_case(false, false; "tx_v1_disabled")]
+    #[test_case(false, true; "tx_v1_deactivated")]
     #[test_case(true, true; "tx_v1_enabled")]
     fn test_sigverify_stage_tx_v1_feature_gate(enable_tx_v1: bool, expected_valid: bool) {
         let genesis_config = create_genesis_config(1).genesis_config;

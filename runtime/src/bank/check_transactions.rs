@@ -573,17 +573,14 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_v1_transactions_rejects_v1_with_ok_lock_result() {
+    fn test_filter_v1_transactions_keeps_v1_with_ok_lock_result() {
         let txs = vec![make_test_tx(TransactionVersion::Number(1))];
         let lock_results = vec![Ok(())];
 
         let filtered = Bank::default_for_tests().filter_v1_transactions(&txs, &lock_results);
 
         assert_eq!(filtered.len(), 1);
-        assert!(matches!(
-            filtered[0],
-            Err(TransactionError::UnsupportedVersion)
-        ));
+        assert!(matches!(filtered[0], Ok(())));
     }
 
     #[test]
@@ -629,10 +626,7 @@ mod tests {
         let filtered = Bank::default_for_tests().filter_v1_transactions(&txs, &lock_results);
 
         assert!(matches!(filtered[0], Ok(())));
-        assert!(matches!(
-            filtered[1],
-            Err(TransactionError::UnsupportedVersion)
-        ));
+        assert!(matches!(filtered[1], Ok(())));
         assert!(matches!(filtered[2], Err(TransactionError::AccountInUse)));
         assert!(matches!(
             filtered[3],
