@@ -105,7 +105,7 @@ impl SnapshotController {
                     false
                 };
 
-            if bank.slot() <= self.latest_abs_request_slot() {
+            let request_kind = if bank.slot() <= self.latest_abs_request_slot() {
                 None
             } else if should_request_full_snapshot {
                 Some((bank, SnapshotRequestKind::FullSnapshot))
@@ -115,7 +115,21 @@ impl SnapshotController {
                 Some((bank, SnapshotRequestKind::FastbootSnapshot))
             } else {
                 None
+            };
+
+            let Some((bank, request_kind)) = request_kind else {
+                return None;
+            };
+            if bank.block_id().is_none() {
+                if request_kind == SnapshotRequestKind::FastbootSnapshot {
+                    // Keep fastboot requested until we can actually enqueue it.
+                    self.request_fastboot_snapshot
+                        .store(true, Ordering::Relaxed);
+                }
+                return None;
             }
+
+            Some((bank, request_kind))
         }) {
             let bank_slot = bank.slot();
             self.set_latest_abs_request_slot(bank_slot);
