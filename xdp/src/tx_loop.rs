@@ -21,6 +21,7 @@ use {
     crossbeam_channel::{Receiver, Sender, TryRecvError},
     libc::{_SC_PAGESIZE, sysconf},
     std::{
+        io,
         net::{IpAddr, SocketAddr, SocketAddrV4},
         thread,
         time::Duration,
@@ -147,7 +148,7 @@ impl TxLoopBuilder<OwnedUmem<PageAlignedMemory>> {
         }
     }
 
-    pub fn build(self) -> TxLoop<OwnedUmem<PageAlignedMemory>> {
+    pub fn build(self) -> Result<TxLoop<OwnedUmem<PageAlignedMemory>>, io::Error> {
         let TxLoopBuilder {
             cpu_id,
             queue_id,
@@ -158,9 +159,7 @@ impl TxLoopBuilder<OwnedUmem<PageAlignedMemory>> {
             umem,
         } = self;
 
-        let Ok((socket, tx)) = Socket::tx(queue, umem, zero_copy, tx_size * 2, tx_size) else {
-            panic!("failed to create AF_XDP socket on queue {queue_id:?}");
-        };
+        let (socket, tx) = Socket::tx(queue, umem, zero_copy, tx_size * 2, tx_size)?;
 
         let Tx {
             // this is where we'll queue frames
@@ -170,13 +169,13 @@ impl TxLoopBuilder<OwnedUmem<PageAlignedMemory>> {
         } = tx;
         let ring = ring.unwrap();
 
-        TxLoop {
+        Ok(TxLoop {
             cpu_id,
             src_mac,
             socket,
             ring,
             completion,
-        }
+        })
     }
 }
 

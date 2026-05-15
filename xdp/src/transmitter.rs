@@ -289,10 +289,15 @@ impl TransmitterBuilder {
             None
         };
 
-        let tx_loops = tx_loop_builders
-            .into_iter()
-            .map(|tx_loop_builder| tx_loop_builder.build())
-            .collect::<Vec<_>>();
+        //let tx_loops = tx_loop_builders
+        //    .into_iter()
+        //    .map(|tx_loop_builder| tx_loop_builder.build()?)
+        //    .collect::<Vec<_>>();
+        let mut tx_loops = Vec::with_capacity(tx_loop_builders.len());
+        for tx_loop_builder in tx_loop_builders {
+            let tx_loop = tx_loop_builder.build()?;
+            tx_loops.push(tx_loop);
+        }
 
         let tables_result = RoutingTables::from_netlink(RouteTable::Main);
 
