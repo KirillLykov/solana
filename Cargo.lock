@@ -376,6 +376,7 @@ dependencies = [
  "solana-clap-utils",
  "solana-cli-config",
  "solana-cli-output",
+ "solana-client",
  "solana-clock",
  "solana-commitment-config",
  "solana-core",

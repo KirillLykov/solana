@@ -108,6 +108,7 @@ predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 scopeguard = { workspace = true }
 solana-account-decoder = { path = "../account-decoder", features = ["agave-unstable-api"] }
+solana-client = { workspace = true }
 solana-core = { path = "../core", features = ["agave-unstable-api", "dev-context-only-utils"] }
 solana-program-option = { workspace = true }
 solana-program-pack = { workspace = true }

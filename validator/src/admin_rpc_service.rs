@@ -1062,6 +1062,7 @@ mod tests {
             accounts_db::{ACCOUNTS_DB_CONFIG_FOR_TESTING, AccountsDbConfig},
             accounts_index::AccountSecondaryIndexes,
         },
+        solana_client::connection_cache::ConnectionCache,
         solana_core::{
             admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
             consensus::tower_storage::NullTowerStorage,
@@ -1237,6 +1238,62 @@ mod tests {
         let event = votor_event_receiver
             .recv()
             .expect("Failed to receive SetIdentity event");
+        assert_matches!(event, VotorEvent::SetIdentity);
+    }
+
+    #[test]
+    fn test_set_identity_with_quic_connection_cache_from_tokio_runtime() {
+        let (votor_event_sender, votor_event_receiver) = unbounded();
+        let RpcHandler { io, meta } = RpcHandler::start_with_config(TestConfig {
+            account_indexes: AccountSecondaryIndexes::default(),
+            votor_event_sender: Some(votor_event_sender),
+        });
+        let client_socket = bind_to_localhost_unique().expect("should bind client socket");
+        let server_socket = bind_to_localhost_unique().expect("should bind server socket");
+        let server_addr = server_socket.local_addr().expect("should get server address");
+        let connection_cache = Arc::new(ConnectionCache::new_with_client_options(
+            "admin_rpc_set_identity_quic_connection_cache_test",
+            1,
+            Some(client_socket),
+            None,
+            None,
+        ));
+        let _connection = connection_cache.get_nonblocking_connection(&server_addr);
+
+        meta.with_post_init(|post_init| {
+            post_init.notifies.write().unwrap().add(
+                KeyUpdaterType::BlsConnectionCache,
+                connection_cache.clone(),
+            );
+            Ok(())
+        })
+        .expect("post_init should be initialized");
+
+        let runtime = Runtime::new().expect("runtime should be created");
+        runtime.block_on(async {
+            let expected_validator_id = Keypair::new();
+            let validator_id_bytes = format!("{:?}", expected_validator_id.to_bytes());
+            let set_id_request = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"setIdentityFromBytes","params":[{validator_id_bytes}, false]}}"#,
+            );
+            let response = io.handle_request_sync(&set_id_request, meta.clone());
+            let actual_parsed_response: Value =
+                serde_json::from_str(&response.expect("actual response should be returned"))
+                    .expect("actual response should deserialize");
+
+            let expected_parsed_response: Value = serde_json::from_str(
+                r#"{
+                    "id": 1,
+                    "jsonrpc": "2.0",
+                    "result": null
+                }"#,
+            )
+            .expect("expected response should parse");
+            assert_eq!(actual_parsed_response, expected_parsed_response);
+        });
+        let event = votor_event_receiver
+            .recv()
+            .expect("should receive SetIdentity event");
         assert_matches!(event, VotorEvent::SetIdentity);
     }
 
