@@ -9,6 +9,7 @@ use {
         },
         sendmmsg::{SendPktsError, batch_send},
     },
+    agave_xdp::pinned_xdp_sender::PinnedXdpSender,
     crossbeam_channel::{Receiver, RecvTimeoutError, SendError, Sender, TrySendError},
     histogram::Histogram,
     solana_net_utils::{
@@ -272,6 +273,8 @@ pub fn receiver(
         .unwrap()
 }
 
+//TODO why it is atomic?
+//TODO why the hach it is in streamer?
 #[allow(clippy::too_many_arguments)]
 pub fn receiver_atomic(
     thread_name: String,
@@ -452,26 +455,6 @@ impl StakedNodes {
     }
 }
 
-fn recv_send(
-    sock: &UdpSocket,
-    r: &PacketBatchReceiver,
-    socket_addr_space: &SocketAddrSpace,
-    stats: &mut Option<StreamerSendStats>,
-) -> Result<()> {
-    let timer = Duration::new(1, 0);
-    let packet_batch = r.recv_timeout(timer)?;
-    if let Some(stats) = stats {
-        packet_batch.iter().for_each(|p| stats.record(p));
-    }
-    let packets = packet_batch.iter().filter_map(|pkt| {
-        let addr = pkt.meta().socket_addr();
-        let data = pkt.data(..)?;
-        socket_addr_space.check(&addr).then_some((data, addr))
-    });
-    batch_send(sock, packets.collect::<Vec<_>>())?;
-    Ok(())
-}
-
 pub fn recv_packet_batches(
     recvr: &PacketBatchReceiver,
     soft_receive_limit: usize,
@@ -500,9 +483,19 @@ pub fn recv_packet_batches(
     Ok((packet_batches, num_packets, recv_duration))
 }
 
+//TODO temporary name until refactor all this crap
+pub trait GossipResponseSender {
+    fn send_batch(&self, batch: PacketBatch) -> std::result::Result<(), SendPktsError>;
+}
+
+// Only in gossip?
+//TODO why the hack it is in streamer? why not in gossip if it is used only by gossip?
+// why it is atomic? how it describes it?
 pub fn responder_atomic(
     name: &'static str,
     sockets: Arc<[UdpSocket]>,
+    //TODO maybe should be generic to unbind interface from implemenation?
+    xdp_sender: Option<PinnedXdpSender>,
     bind_ip_addrs: Arc<BindIpAddrs>,
     r: PacketBatchReceiver,
     socket_addr_space: SocketAddrSpace,
@@ -511,17 +504,30 @@ pub fn responder_atomic(
     Builder::new()
         .name(format!("solRspndr{name}"))
         .spawn(move || {
-            responder_loop(
-                MultihomedSocketProvider::new(sockets, bind_ip_addrs),
-                name,
-                r,
-                socket_addr_space,
-                stats_reporter_sender,
-            );
+            //TODO shall not be if-else. Maybe use some enum that encapsulates possible options?
+            if let Some(xdp_sender) = xdp_sender {
+                return responder_loop(
+                    name,
+                    r,
+                    (xdp_sender, socket_addr_space),
+                    stats_reporter_sender,
+                );
+            } else {
+                responder_loop(
+                    name,
+                    r,
+                    UdpSocketSender {
+                        socket_provider: MultihomedSocketProvider::new(sockets, bind_ip_addrs),
+                        socket_addr_space,
+                    },
+                    stats_reporter_sender,
+                );
+            }
         })
         .unwrap()
 }
 
+// Only in repair?
 pub fn responder(
     name: &'static str,
     sock: Arc<UdpSocket>,
@@ -533,21 +539,74 @@ pub fn responder(
         .name(format!("solRspndr{name}"))
         .spawn(move || {
             responder_loop(
-                FixedSocketProvider::new(sock),
                 name,
                 r,
-                socket_addr_space,
+                UdpSocketSender {
+                    socket_provider: FixedSocketProvider::new(sock),
+                    socket_addr_space,
+                },
                 stats_reporter_sender,
             );
         })
         .unwrap()
 }
 
-fn responder_loop<P: SocketProvider>(
-    provider: P,
+//TODO rename later
+struct UdpSocketSender<P> {
+    socket_provider: P,
+    socket_addr_space: SocketAddrSpace,
+}
+
+impl<P: SocketProvider> GossipResponseSender for UdpSocketSender<P> {
+    fn send_batch(&self, batch: PacketBatch) -> std::result::Result<(), SendPktsError> {
+        let sock = self.socket_provider.current_socket_ref();
+        let packets = batch.iter().filter_map(|pkt| {
+            let addr = pkt.meta().socket_addr();
+            let data = pkt.data(..)?;
+            self.socket_addr_space.check(&addr).then_some((data, addr))
+        });
+        batch_send(sock, packets.collect::<Vec<_>>())
+    }
+}
+
+impl GossipResponseSender for (PinnedXdpSender, SocketAddrSpace) {
+    fn send_batch(&self, batch: PacketBatch) -> std::result::Result<(), SendPktsError> {
+        let (xdp_sender, socket_addr_space) = self;
+        let packets = batch.iter().filter_map(|pkt| {
+            let addr = pkt.meta().socket_addr();
+            let data = pkt.data(..)?;
+            socket_addr_space.check(&addr).then_some((data, addr))
+        });
+
+        let mut dropped_full = 0;
+        let mut disconnected = 0;
+
+        for (idx, (payload, addr)) in packets.enumerate() {
+            match xdp_sender.try_send(idx, addr, bytes::Bytes::copy_from_slice(payload)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    dropped_full += 1;
+                    continue;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    disconnected += 1;
+                    break;
+                }
+            }
+        }
+        if dropped_full > 0 || disconnected > 0 {
+            info!(
+                "XDP sender dropped {dropped_full} packets due to full send queue, and had {disconnected} disconnected errors"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn responder_loop<G: GossipResponseSender>(
     name: &'static str,
     r: PacketBatchReceiver,
-    socket_addr_space: SocketAddrSpace,
+    sender: G,
     stats_reporter_sender: Option<Sender<Box<dyn FnOnce() + Send>>>,
 ) {
     let mut errors = 0;
@@ -560,18 +619,22 @@ fn responder_loop<P: SocketProvider>(
     }
 
     loop {
-        let sock = provider.current_socket_ref();
-        if let Err(e) = recv_send(sock, &r, &socket_addr_space, &mut stats) {
-            match e {
-                StreamerError::RecvTimeout(RecvTimeoutError::Disconnected) => break,
-                StreamerError::RecvTimeout(RecvTimeoutError::Timeout) => (),
-                _ => {
-                    errors += 1;
-                    last_error = Some(e);
-                }
-            }
+        let timer = Duration::new(1, 0);
+        let packet_batch = match r.recv_timeout(timer) {
+            Ok(batch) => batch,
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => continue,
+        };
+        if let Some(stats) = stats.as_mut() {
+            packet_batch.iter().for_each(|p| stats.record(p));
         }
+        if let Err(e) = sender.send_batch(packet_batch) {
+            errors += 1;
+            last_error = Some(StreamerError::SendPktsError(e));
+        }
+        //TODO is this error reporting even correct?
         let now = timestamp();
+        //TODO so in gossip we report every 2second and here ever 1, Why?
         if now - last_print > 1000 && errors != 0 {
             datapoint_info!(name, ("errors", errors, i64),);
             info!("{name} last-error: {last_error:?} count: {errors}");

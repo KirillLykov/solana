@@ -35,6 +35,8 @@ dummy-for-ci-check = ["conformance"]
 [dependencies]
 agave-logger = { workspace = true }
 agave-random = { workspace = true }
+# TODO this is only for PinnedXdpSender, maybe we move it in net-utils
+agave-xdp = { workspace = true }
 arc-swap = { workspace = true }
 assert_matches = { workspace = true }
 bv = { workspace = true, features = ["serde"] }

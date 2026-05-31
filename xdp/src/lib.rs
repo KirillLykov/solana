@@ -27,6 +27,8 @@ pub mod ecn_codepoint;
 
 pub mod transmitter;
 
+pub mod pinned_xdp_sender;
+
 #[cfg(target_os = "linux")]
 pub use program::load_xdp_program;
 use std::{io, net::Ipv4Addr};

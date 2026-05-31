@@ -166,6 +166,8 @@ fn start_gossip_node(
         &cluster_info,
         None,
         gossip_sockets,
+        //TODO shall i pass here PinnedXdpSender?
+        None,
         gossip_validators,
         should_check_duplicate_instance,
         None,

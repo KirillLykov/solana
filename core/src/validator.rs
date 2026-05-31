@@ -41,6 +41,7 @@ use {
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
     },
+    agave_xdp::pinned_xdp_sender::PinnedXdpSender as GossipXdpSender,
     agave_xdp::transmitter::{Transmitter, TransmitterBuilder},
     anyhow::{Result, anyhow},
     crossbeam_channel::{Receiver, bounded, unbounded},
@@ -147,7 +148,7 @@ use {
     },
     solana_time_utils::timestamp,
     solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
-    solana_turbine::{self, XdpSender, broadcast_stage::BroadcastStageType},
+    solana_turbine::{self, XdpSender as TurbineXdpSender, broadcast_stage::BroadcastStageType},
     solana_unified_scheduler_pool::DefaultSchedulerPool,
     solana_validator_exit::Exit,
     solana_vote_program::vote_state::{VoteStateV4, handler::VoteStateHandler},
@@ -155,7 +156,7 @@ use {
         borrow::Cow,
         cmp,
         collections::{HashMap, HashSet},
-        net::{SocketAddr, SocketAddrV4},
+        net::{Ipv4Addr, SocketAddr, SocketAddrV4},
         num::{NonZeroU64, NonZeroUsize},
         path::{Path, PathBuf},
         str::FromStr,
@@ -535,6 +536,10 @@ pub enum ValidatorStartProgress {
     Running,
 }
 
+pub struct ValidatorXdpConfig {
+    pub transmitter_builder: TransmitterBuilder,
+    pub src_ip: Ipv4Addr,
+}
 struct BlockstoreRootScan {
     thread: Option<JoinHandle<Result<usize, BlockstoreError>>>,
 }
@@ -694,7 +699,7 @@ impl Validator {
         socket_addr_space: SocketAddrSpace,
         tpu_config: ValidatorTpuConfig,
         admin_rpc_service_post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
-        xdp_builder_with_src_addr: Option<(TransmitterBuilder, SocketAddrV4)>,
+        xdp_config: Option<ValidatorXdpConfig>,
     ) -> Result<Self> {
         let exit = Arc::new(AtomicBool::new(false));
         Self::new_with_exit(
@@ -710,7 +715,7 @@ impl Validator {
             socket_addr_space,
             tpu_config,
             admin_rpc_service_post_init,
-            xdp_builder_with_src_addr,
+            xdp_config,
             exit,
         )
     }
@@ -729,7 +734,7 @@ impl Validator {
         socket_addr_space: SocketAddrSpace,
         tpu_config: ValidatorTpuConfig,
         admin_rpc_service_post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
-        xdp_builder_with_src_addr: Option<(TransmitterBuilder, SocketAddrV4)>,
+        xdp_config: Option<ValidatorXdpConfig>,
         exit: Arc<AtomicBool>,
     ) -> Result<Self> {
         #[cfg(debug_assertions)]
@@ -1418,10 +1423,46 @@ impl Validator {
         let epoch_specs: Box<dyn solana_gossip::epoch_specs::EpochSpecs> =
             Box::new(crate::epoch_specs::EpochSpecs::from(bank_forks.clone()));
 
+        //TODO: I've moved this code here to reuse the XdpSender for both gossip and turbine, but
+        //not sure if there were some motivation of having it down in this function, will it work
+        //now?
+        let (xdp_transmitter, turbine_xdp_sender, quic_xdp_sender, gossip_xdp_sender) =
+            if let Some(ValidatorXdpConfig {
+                transmitter_builder,
+                src_ip,
+            }) = xdp_config
+            {
+                let turbine_src_port = node.sockets.retransmit_sockets[0]
+                    .local_addr()
+                    .expect("retransmit socket should have local address")
+                    .port();
+                let gossip_src_port = node.sockets.gossip[0]
+                    .local_addr()
+                    .expect("gossip socket should have local address")
+                    .port();
+
+                let (transmitter, sender) = transmitter_builder.build();
+                (
+                    Some(transmitter),
+                    Some(TurbineXdpSender::new(
+                        sender.clone(),
+                        SocketAddrV4::new(src_ip, turbine_src_port),
+                    )),
+                    Some((sender.clone(), src_ip)),
+                    Some(GossipXdpSender::new(
+                        sender.clone(),
+                        SocketAddrV4::new(src_ip, gossip_src_port),
+                    )),
+                )
+            } else {
+                (None, None, None, None)
+            };
+
         let gossip_service = GossipService::new(
             &cluster_info,
             Some(epoch_specs),
             node.sockets.gossip.clone(),
+            gossip_xdp_sender,
             config.gossip_validators.clone(),
             config.should_check_duplicate_instance,
             Some(stats_reporter_sender.clone()),
@@ -1563,18 +1604,6 @@ impl Validator {
         });
         // This channel backing up indicates a serious problem in votor
         let (votor_event_sender, votor_event_receiver) = bounded(1000);
-
-        let (xdp_transmitter, turbine_xdp_sender, quic_xdp_sender) =
-            if let Some((xdp_transmit_builder, src_addr)) = xdp_builder_with_src_addr {
-                let (transmitter, sender) = xdp_transmit_builder.build();
-                (
-                    Some(transmitter),
-                    Some(XdpSender::new(sender.clone(), src_addr)),
-                    Some((sender, *src_addr.ip())),
-                )
-            } else {
-                (None, None, None)
-            };
 
         // disable all2all tests if not allowed for a given cluster type
         let alpenglow_socket = if genesis_config.cluster_type == ClusterType::Testnet

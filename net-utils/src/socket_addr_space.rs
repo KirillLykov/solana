@@ -1,5 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 
+//TODO mamma mia, perche "Space"? Policy or something should be if it is needed at all.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SocketAddrSpace {
     Unspecified,

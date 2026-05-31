@@ -7,6 +7,7 @@ use {
         contact_info::ContactInfo,
         epoch_specs::EpochSpecs,
     },
+    agave_xdp::pinned_xdp_sender::PinnedXdpSender as GossipXdpSender,
     crossbeam_channel::Sender,
     solana_keypair::Keypair,
     solana_net_utils::{DEFAULT_IP_ECHO_SERVER_THREADS, SocketAddrSpace},
@@ -39,7 +40,10 @@ impl GossipService {
     pub fn new(
         cluster_info: &Arc<ClusterInfo>,
         mut epoch_specs: Option<Box<dyn EpochSpecs>>,
+        //TODO can we have some abstraction that encapsulates both?
         gossip_sockets: Arc<[UdpSocket]>,
+        //TODO Do we use fixed source port for gossip?
+        xdp_sender: Option<GossipXdpSender>,
         gossip_validators: Option<HashSet<Pubkey>>,
         should_check_duplicate_instance: bool,
         stats_reporter_sender: Option<Sender<Box<dyn FnOnce() + Send>>>,
@@ -94,6 +98,7 @@ impl GossipService {
         let t_responder = streamer::responder_atomic(
             "Gossip",
             gossip_sockets,
+            xdp_sender,
             cluster_info.bind_ip_addrs(),
             response_receiver,
             socket_addr_space,
@@ -329,6 +334,7 @@ pub fn make_node(
         None,
         gossip_sockets,
         None,
+        None,
         should_check_duplicate_instance,
         None,
         exit,
@@ -357,6 +363,7 @@ mod tests {
             &c,
             None,
             tn.sockets.gossip,
+            None,
             None,
             true, // should_check_duplicate_instance
             None,
