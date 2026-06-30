@@ -566,19 +566,29 @@ pub struct SystemMonitorStatsReportConfig {
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-enum InterestingLimit {
-    Recommend(i64),
-    QueryOnly,
+#[derive(Clone, Copy, strum_macros::EnumIter, strum_macros::IntoStaticStr)]
+enum SysctlProbe {
+    #[strum(serialize = "net.core.rmem_max")]
+    NetCoreRmemMax,
+    #[strum(serialize = "net.core.wmem_max")]
+    NetCoreWmemMax,
+    #[strum(serialize = "vm.max_map_count")]
+    VmMaxMapCount,
+    #[strum(serialize = "net.core.optmem_max")]
+    NetCoreOptmemMax,
+    #[strum(serialize = "net.core.netdev_max_backlog")]
+    NetCoreNetdevMaxBacklog,
 }
 
-#[cfg(target_os = "linux")]
-const INTERESTING_LIMITS: &[(&str, InterestingLimit)] = &[
-    ("net.core.rmem_max", InterestingLimit::Recommend(134217728)),
-    ("net.core.wmem_max", InterestingLimit::Recommend(134217728)),
-    ("vm.max_map_count", InterestingLimit::Recommend(1000000)),
-    ("net.core.optmem_max", InterestingLimit::QueryOnly),
-    ("net.core.netdev_max_backlog", InterestingLimit::QueryOnly),
-];
+impl SysctlProbe {
+    fn recommended_minimum(self) -> Option<i64> {
+        match self {
+            Self::NetCoreRmemMax | Self::NetCoreWmemMax => Some(134_217_728),
+            Self::VmMaxMapCount => Some(1_000_000),
+            Self::NetCoreOptmemMax | Self::NetCoreNetdevMaxBacklog => None,
+        }
+    }
+}
 
 impl SystemMonitorService {
     pub fn new(exit: Arc<AtomicBool>, config: SystemMonitorStatsReportConfig) -> Self {
@@ -593,8 +603,15 @@ impl SystemMonitorService {
         Self { thread_hdl }
     }
 
+    #[cfg(not(target_os = "linux"))]
+    pub fn check_os_network_limits() -> bool {
+        datapoint_info!("os-config", ("platform", platform_id(), String));
+        true
+    }
+
     #[cfg(target_os = "linux")]
-    fn linux_get_current_network_limits() -> Vec<(&'static str, &'static InterestingLimit, i64)> {
+    pub fn check_os_network_limits() -> bool {
+        use strum::IntoEnumIterator;
         use sysctl::Sysctl;
 
         fn sysctl_read(name: &str) -> Result<String, sysctl::SysctlError> {
@@ -606,62 +623,39 @@ impl SystemMonitorService {
         fn normalize_err<E: std::fmt::Display>(key: &str, error: E) -> String {
             format!("Failed to query value for {key}: {error}")
         }
-        INTERESTING_LIMITS
-            .iter()
-            .map(|(key, interesting_limit)| {
-                let current_value = sysctl_read(key)
-                    .map_err(|e| normalize_err(key, e))
-                    .and_then(|val| val.parse::<i64>().map_err(|e| normalize_err(key, e)))
-                    .unwrap_or_else(|e| {
-                        error!("{e}");
-                        -1
-                    });
-                (*key, interesting_limit, current_value)
-            })
-            .collect::<Vec<_>>()
-    }
 
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    fn linux_report_network_limits(
-        current_limits: &[(&'static str, &'static InterestingLimit, i64)],
-    ) -> bool {
-        current_limits
-            .iter()
-            .all(|(key, interesting_limit, current_value)| {
-                datapoint_warn!("os-config", (key, *current_value, i64));
-                match interesting_limit {
-                    InterestingLimit::Recommend(recommended_value)
-                        if current_value < recommended_value =>
-                    {
+        datapoint_info!("os-config", ("platform", platform_id(), String));
+        SysctlProbe::iter().fold(true, |limits_ok, sysctl_probe| {
+            let key: &'static str = sysctl_probe.into();
+            let current_value = sysctl_read(key)
+                .map_err(|e| normalize_err(key, e))
+                .and_then(|val| val.parse::<i64>().map_err(|e| normalize_err(key, e)))
+                .unwrap_or_else(|e| {
+                    error!("{e}");
+                    -1
+                });
+            let current_limit_ok = {
+                datapoint_warn!("os-config", (key, current_value, i64));
+                match sysctl_probe.recommended_minimum() {
+                    Some(recommended_value) if current_value < recommended_value => {
                         warn!(
                             "  {key}: recommended={recommended_value}, current={current_value} \
                              too small"
                         );
                         false
                     }
-                    InterestingLimit::Recommend(recommended_value) => {
+                    Some(recommended_value) => {
                         info!("  {key}: recommended={recommended_value} current={current_value}");
                         true
                     }
-                    InterestingLimit::QueryOnly => {
+                    None => {
                         info!("  {key}: report-only --  current={current_value}");
                         true
                     }
                 }
-            })
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn check_os_network_limits() -> bool {
-        datapoint_info!("os-config", ("platform", platform_id(), String));
-        true
-    }
-
-    #[cfg(target_os = "linux")]
-    pub fn check_os_network_limits() -> bool {
-        datapoint_info!("os-config", ("platform", platform_id(), String));
-        let current_limits = Self::linux_get_current_network_limits();
-        Self::linux_report_network_limits(&current_limits)
+            };
+            limits_ok && current_limit_ok
+        })
     }
 
     #[cfg(target_os = "linux")]
