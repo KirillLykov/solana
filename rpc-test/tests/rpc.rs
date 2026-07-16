@@ -461,9 +461,9 @@ fn test_rpc_subscriptions() {
             .iter()
             .map(|tx| bincode::serialize(tx).unwrap())
             .collect();
-        let _ = transaction_sender
-            .send_transactions_in_batch(wire_txs)
-            .await;
+        for wire_tx in wire_txs {
+            let _ = transaction_sender.send_transaction(wire_tx).await;
+        }
     });
 
     // Track mint balance to know when transactions have completed
@@ -556,9 +556,7 @@ fn test_run_tpu_send_transaction() {
 
     let tx_bytes = bincode::serialize(&tx).unwrap();
     rt.block_on(async {
-        let _ = transaction_sender
-            .send_transactions_in_batch(vec![tx_bytes])
-            .await;
+        let _ = transaction_sender.send_transaction(tx_bytes).await;
     });
 
     let timeout = Duration::from_secs(5);
