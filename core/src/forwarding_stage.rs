@@ -26,12 +26,11 @@ use {
     solana_streamer::sendmmsg::{SendPktsError, batch_send},
     solana_tls_utils::NotifyKeyUpdate,
     solana_tpu_client_next::{
-        ConnectionWorkersScheduler,
+        ConnectionWorkersScheduler, WireTransaction,
         connection_workers_scheduler::{
             BindTarget, ConnectionWorkersSchedulerConfig, Fanout, StakeIdentity,
         },
         leader_updater::LeaderUpdater,
-        transaction_batch::TransactionBatch,
     },
     solana_transaction::sanitized::MessageHash,
     solana_transaction_error::TransportError,
@@ -67,6 +66,12 @@ const MAX_BYTES_PER_SECOND: u64 = 12_000_000;
 /// was found to be optimal. If we need to improve performance
 /// this should be evaluated with new stage.
 const FORWARD_BATCH_SIZE: usize = 128;
+
+/// Scheduler capacity in transactions, equivalent to the previous 128 batches.
+const SCHEDULER_CHANNEL_CAPACITY: usize = 128 * FORWARD_BATCH_SIZE;
+
+/// Worker capacity in transactions, equivalent to the previous two batches.
+const WORKER_CHANNEL_CAPACITY: usize = 2 * FORWARD_BATCH_SIZE;
 
 /// How far ahead to look in the leader schedule when determining forwarding
 /// addresses. The unit is `NUM_CONSECUTIVE_LEADER_SLOTS`.
@@ -490,7 +495,7 @@ impl LeaderUpdater for ForwardAddressGetter {
 
 #[derive(Clone)]
 struct TpuClientNextClient {
-    sender: mpsc::Sender<TransactionBatch>,
+    sender: mpsc::Sender<WireTransaction>,
     update_certificate_sender: watch::Sender<Option<StakeIdentity>>,
 }
 
@@ -504,8 +509,7 @@ impl TpuClientNextClient {
         bind_socket: UdpSocket,
         cancel: CancellationToken,
     ) -> Self {
-        // For now use large channel, the more suitable size to be found later.
-        let (sender, receiver) = mpsc::channel(128);
+        let (sender, receiver) = mpsc::channel(SCHEDULER_CHANNEL_CAPACITY);
         let leader_updater = forward_address_getter;
 
         let config = Self::create_config(bind_socket, stake_identity);
@@ -539,8 +543,7 @@ impl TpuClientNextClient {
             // Cache size of 128 covers all nodes above the P90 slot count threshold,
             // which together account for ~75% of total slots in the epoch.
             num_connections: NonZeroUsize::new(128).unwrap(),
-            skip_check_transaction_age: true,
-            worker_channel_size: 2,
+            worker_channel_size: WORKER_CHANNEL_CAPACITY,
             max_reconnect_attempts: 4,
             // Send to the next leader only, but verify that connections exist
             // for the leaders of the next `4 * NUM_CONSECUTIVE_SLOTS`.
@@ -558,9 +561,14 @@ impl ForwardingClient for TpuClientNextClient {
         &self,
         wire_transactions: Vec<Vec<u8>>,
     ) -> Result<(), ForwardingClientError> {
-        self.sender
-            .try_send(TransactionBatch::new(wire_transactions))
-            .map_err(|_e| ForwardingClientError::Failed)
+        let permits = self
+            .sender
+            .try_reserve_many(wire_transactions.len())
+            .map_err(|_err| ForwardingClientError::Failed)?;
+        for (permit, wire_transaction) in permits.zip(wire_transactions) {
+            permit.send(wire_transaction.into());
+        }
+        Ok(())
     }
 }
 
