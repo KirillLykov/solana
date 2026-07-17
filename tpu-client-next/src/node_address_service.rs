@@ -68,13 +68,11 @@
 use {
     crate::{
         leader_updater::LeaderUpdater,
-        logging::error,
         node_address_service::{
             leader_tpu_cache_service::{Error as LeaderTpuCacheServiceError, LeaderUpdateReceiver},
             slot_update_service::Error as SlotUpdateServiceError,
         },
     },
-    async_trait::async_trait,
     futures::StreamExt,
     solana_clock::Slot,
     std::{net::SocketAddr, sync::Arc},
@@ -98,12 +96,16 @@ pub use {
     slot_update_service::SlotUpdateService,
 };
 
+#[derive(Clone)]
+pub struct NodeAddressProvider {
+    leaders_receiver: LeaderUpdateReceiver,
+    slot_receiver: SlotReceiver,
+}
+
 /// [`NodeAddressService`] is a convenience wrapper for [`SlotUpdateService`] and
 /// [`LeaderTpuCacheService`] to track upcoming leaders and maintains an up-to-date mapping of
 /// leader id to TPU socket address.
 pub struct NodeAddressService {
-    leaders_receiver: LeaderUpdateReceiver,
-    slot_receiver: SlotReceiver,
     slot_update_service: SlotUpdateService,
     leader_cache_service: LeaderTpuCacheService,
 }
@@ -125,7 +127,7 @@ impl NodeAddressService {
         slot_update_stream: impl StreamExt<Item = SlotEvent> + Send + 'static,
         config: LeaderTpuCacheServiceConfig,
         cancel: CancellationToken,
-    ) -> Result<Self, NodeAddressServiceError> {
+    ) -> Result<(NodeAddressProvider, NodeAddressService), NodeAddressServiceError> {
         let initial_slot = cluster_info_provider
             .initial_slot()
             .await
@@ -140,12 +142,16 @@ impl NodeAddressService {
         )
         .await?;
 
-        Ok(Self {
-            leaders_receiver,
-            slot_receiver,
-            slot_update_service,
-            leader_cache_service,
-        })
+        Ok((
+            NodeAddressProvider {
+                leaders_receiver,
+                slot_receiver,
+            },
+            NodeAddressService {
+                slot_update_service,
+                leader_cache_service,
+            },
+        ))
     }
 
     pub async fn shutdown(&mut self) -> Result<(), NodeAddressServiceError> {
@@ -157,23 +163,19 @@ impl NodeAddressService {
         leader_cache_service_res?;
         Ok(())
     }
+}
 
+impl NodeAddressProvider {
     /// Returns the estimated current slot.
     pub fn estimated_current_slot(&self) -> Slot {
         self.slot_receiver.slot()
     }
 }
 
-#[async_trait]
-impl LeaderUpdater for NodeAddressService {
-    fn next_leaders(&mut self, lookahead_leaders: usize) -> Vec<SocketAddr> {
-        self.leaders_receiver.leaders(lookahead_leaders)
-    }
-
-    async fn stop(&mut self) {
-        if let Err(e) = self.shutdown().await {
-            error!("Failed to shutdown NodeAddressService: {e}");
-        }
+impl LeaderUpdater for NodeAddressProvider {
+    fn next_leaders(&mut self, lookahead_leaders: usize, leaders: &mut Vec<SocketAddr>) {
+        self.leaders_receiver
+            .next_leaders(lookahead_leaders, leaders);
     }
 }
 

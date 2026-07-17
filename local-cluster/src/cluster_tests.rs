@@ -117,7 +117,7 @@ impl TpuSender {
     /// Send a pre-serialized transaction wire frame through an open `sender`.
     pub fn send_wire_transaction(&self, sender: &TransactionSender, wire_tx: Vec<u8>) {
         self.runtime
-            .block_on(async { sender.send_transactions_in_batch(vec![wire_tx]).await })
+            .block_on(async { sender.send_transaction(wire_tx).await })
             .expect("TpuSender: should send transactions in batch");
     }
 
@@ -127,7 +127,7 @@ impl TpuSender {
     pub fn try_send_wire_transaction(&self, sender: &TransactionSender, wire_tx: Vec<u8>) {
         if let Err(e) = self
             .runtime
-            .block_on(async { sender.send_transactions_in_batch(vec![wire_tx]).await })
+            .block_on(async { sender.send_transaction(wire_tx).await })
         {
             debug!("TpuSender: send_wire_transaction failed: {e:?}");
         }
