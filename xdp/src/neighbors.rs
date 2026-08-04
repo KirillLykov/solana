@@ -1,4 +1,3 @@
-#[cfg(target_os = "linux")]
 use {
     crate::netlink::{NetlinkSocket, netlink_use_neighbor},
     crossbeam_channel::{RecvTimeoutError, Sender},
@@ -16,10 +15,8 @@ use {
     },
 };
 
-#[cfg(target_os = "linux")]
 const NEIGHBOR_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
-#[cfg(target_os = "linux")]
 /// Intervals between neighbor refreshes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NeighborIntervals {
@@ -29,7 +26,6 @@ pub struct NeighborIntervals {
     pub miss_interval: Duration,
 }
 
-#[cfg(target_os = "linux")]
 impl NeighborIntervals {
     fn min_interval(self, is_resolved: bool) -> Duration {
         if is_resolved {
@@ -40,7 +36,6 @@ impl NeighborIntervals {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Clone)]
 /// Observes neighbors and keeps them fresh in the neigh table.
 ///
@@ -54,7 +49,6 @@ pub(crate) struct NeighborsObserver {
     next_sweep_at: Option<Instant>,
 }
 
-#[cfg(target_os = "linux")]
 impl NeighborsObserver {
     fn new(sender: Sender<NeighborEvent>, intervals: NeighborIntervals) -> Self {
         Self {
@@ -106,27 +100,23 @@ impl NeighborsObserver {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct NeighborKey {
     if_index: u32,
     ip: Ipv4Addr,
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug)]
 struct NeighborState {
     last_touched_at: Instant,
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug)]
 struct NeighborEvent {
     key: NeighborKey,
     is_resolved: bool,
 }
 
-#[cfg(target_os = "linux")]
 /// Submits USE requests for neighbors observed by the `NeighborsObserver`.
 ///
 /// This is a separate thread since netlink requires CAP_NET_ADMIN and we don't want to require that
@@ -138,7 +128,6 @@ pub(crate) struct NeighborsRefresher {
     next_sweep_at: Option<Instant>,
 }
 
-#[cfg(target_os = "linux")]
 impl NeighborsRefresher {
     pub(crate) fn start<F: FnOnce() + Send + Sync + 'static>(
         exit: Arc<AtomicBool>,
@@ -209,7 +198,6 @@ impl NeighborsRefresher {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn sweep(
     next_sweep_at: &mut Option<Instant>,
     neighbors: &mut HashMap<NeighborKey, NeighborState>,
@@ -224,7 +212,6 @@ fn sweep(
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use {
         super::*,
