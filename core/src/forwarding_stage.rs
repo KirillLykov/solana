@@ -486,10 +486,16 @@ impl ForwardingClient for VoteClient {
 }
 
 impl LeaderUpdater for ForwardAddressGetter {
-    fn next_leaders(&mut self, lookahead_slots: usize, leaders: &mut Vec<SocketAddr>) {
-        leaders.clear();
-        leaders
-            .extend(self.get_non_vote_forwarding_addresses(lookahead_slots as u64, Protocol::QUIC));
+    fn next_leaders<'leaders>(
+        &mut self,
+        lookahead_leaders: usize,
+        leaders: &'leaders mut [SocketAddr],
+    ) -> &'leaders [SocketAddr] {
+        let addresses = self
+            .get_non_vote_forwarding_addresses(lookahead_leaders as u64, Protocol::QUIC);
+        let len = leaders.len().min(addresses.len());
+        leaders[..len].copy_from_slice(&addresses[..len]);
+        &leaders[..len]
     }
 }
 

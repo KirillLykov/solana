@@ -220,7 +220,7 @@ impl ClientBuilder {
             num_connections: self.num_connections,
             worker_channel_size: self.worker_channel_size.unwrap_or(self.sender_channel_size),
             max_reconnect_attempts: self.max_reconnect_attempts,
-            // We open connection to one more leader in advance, which time-wise means ~1.6s
+            // We open connection to one more leader in advance
             leaders_fanout: Fanout {
                 connect: self.leader_send_fanout.saturating_add(1),
                 send: self.leader_send_fanout,

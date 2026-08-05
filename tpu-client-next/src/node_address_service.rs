@@ -179,9 +179,13 @@ impl NodeAddressProvider {
 }
 
 impl LeaderUpdater for NodeAddressProvider {
-    fn next_leaders(&mut self, lookahead_leaders: usize, leaders: &mut Vec<SocketAddr>) {
+    fn next_leaders<'leaders>(
+        &mut self,
+        lookahead_leaders: usize,
+        leaders: &'leaders mut [SocketAddr],
+    ) -> &'leaders [SocketAddr] {
         self.leaders_receiver
-            .next_leaders(lookahead_leaders, leaders);
+            .next_leaders(lookahead_leaders, leaders)
     }
 }
 

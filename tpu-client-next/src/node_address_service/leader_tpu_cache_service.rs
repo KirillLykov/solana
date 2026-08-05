@@ -68,14 +68,18 @@ pub struct LeaderUpdateReceiver {
 }
 
 impl LeaderUpdateReceiver {
-    pub fn next_leaders(&self, lookahead_leaders: usize, leaders: &mut Vec<SocketAddr>) {
+    pub fn next_leaders<'leaders>(
+        &self,
+        lookahead_leaders: usize,
+        leaders: &'leaders mut [SocketAddr],
+    ) -> &'leaders [SocketAddr] {
         let tpu_info = self.receiver.borrow();
         let lookahead_leaders = if tpu_info.extend {
             lookahead_leaders.saturating_add(1)
         } else {
             lookahead_leaders
         };
-        select_unique_leaders(&tpu_info.leaders, lookahead_leaders, leaders);
+        select_unique_leaders(&tpu_info.leaders, lookahead_leaders, leaders)
     }
 }
 

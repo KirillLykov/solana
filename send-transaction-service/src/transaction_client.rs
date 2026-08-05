@@ -188,22 +188,37 @@ impl<T> LeaderUpdater for SendTransactionServiceLeaderUpdater<T>
 where
     T: TpuInfoWithSendStatic,
 {
-    fn next_leaders(&mut self, lookahead_leaders: usize, leaders: &mut Vec<SocketAddr>) {
-        leaders.clear();
-
+    fn next_leaders<'leaders>(
+        &mut self,
+        lookahead_leaders: usize,
+        leaders: &'leaders mut [SocketAddr],
+    ) -> &'leaders [SocketAddr] {
+        let mut len = 0;
         if let Some(tpu_peers) = &self.tpu_peers {
-            leaders.extend_from_slice(tpu_peers);
+            let copy_len = leaders.len().min(tpu_peers.len());
+            leaders[..copy_len].copy_from_slice(&tpu_peers[..copy_len]);
+            len += copy_len;
         }
 
         if let Some(discovered_peers) = self
             .leader_info_provider
             .get_leader_info()
-            .map(|leader_info| leader_info.get_not_unique_leader_tpus(lookahead_leaders as u64))
+            .map(|leader_info| {
+                leader_info.get_not_unique_leader_tpus(lookahead_leaders as u64)
+            })
             .filter(|addresses| !addresses.is_empty())
         {
-            leaders.extend(discovered_peers.into_iter().copied());
-        } else {
-            leaders.push(self.my_tpu_address);
+            for address in discovered_peers {
+                if len == leaders.len() {
+                    break;
+                }
+                leaders[len] = *address;
+                len += 1;
+            }
+        } else if len < leaders.len() {
+            leaders[len] = self.my_tpu_address;
+            len += 1;
         }
+        &leaders[..len]
     }
 }

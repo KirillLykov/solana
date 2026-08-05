@@ -13,15 +13,23 @@ use {
 /// [`ConnectionWorkersScheduler`](crate::ConnectionWorkersScheduler) to
 /// identify next leaders to send transactions to.
 pub trait LeaderUpdater: Send {
-    /// Clears `leaders` and fills it with up to `lookahead_leaders` upcoming leaders starting from the
-    /// current estimated slot.
+    /// Writes upcoming leaders starting from the current estimated slot into `leaders` and returns
+    /// the populated prefix.
     ///
     /// Leaders are returned per [`NUM_CONSECUTIVE_LEADER_SLOTS`] to avoid unnecessary repetition.
+    /// `lookahead_leaders` controls the scheduled-leader lookahead. Implementations may also
+    /// include configured fixed peers or one additional scheduled leader when the current slot is
+    /// the last slot in a leader's consecutive slots. If the supplied buffer is too small,
+    /// additional addresses are omitted.
     ///
     /// If the current leader estimation is incorrect and transactions are sent to
     /// only one estimated leader, there is a risk of losing all the transactions,
     /// depending on the forwarding policy.
-    fn next_leaders(&mut self, lookahead_leaders: usize, leaders: &mut Vec<SocketAddr>);
+    fn next_leaders<'leaders>(
+        &mut self,
+        lookahead_leaders: usize,
+        leaders: &'leaders mut [SocketAddr],
+    ) -> &'leaders [SocketAddr];
 }
 
 /// Error type for [`LeaderUpdater`].
@@ -56,8 +64,13 @@ struct PinnedLeaderUpdater {
 
 #[cfg(feature = "dev-context-only-utils")]
 impl LeaderUpdater for PinnedLeaderUpdater {
-    fn next_leaders(&mut self, _lookahead_leaders: usize, leaders: &mut Vec<SocketAddr>) {
-        leaders.clear();
-        leaders.extend_from_slice(&self.address);
+    fn next_leaders<'leaders>(
+        &mut self,
+        _lookahead_leaders: usize,
+        leaders: &'leaders mut [SocketAddr],
+    ) -> &'leaders [SocketAddr] {
+        let len = leaders.len().min(self.address.len());
+        leaders[..len].copy_from_slice(&self.address[..len]);
+        &leaders[..len]
     }
 }
