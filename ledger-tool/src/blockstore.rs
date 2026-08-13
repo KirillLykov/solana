@@ -21,7 +21,7 @@ use {
     solana_ledger::{
         ancestor_iterator::AncestorIterator,
         blockstore::{
-            Blockstore, PurgeType,
+            Blockstore, PurgeType, ValidateInsertShred,
             column::{Column, ColumnName},
         },
         blockstore_options::AccessType,
@@ -636,7 +636,12 @@ fn do_blockstore_process_command(ledger_path: &Path, matches: &ArgMatches<'_>) -
                 let shreds = source.get_data_shreds_for_slot(slot, 0)?;
                 let shreds = shreds.into_iter().map(Cow::Owned);
                 if target
-                    .insert_cow_shreds(shreds, true, &mut pinnable_slice, &mut write_batch)
+                    .insert_cow_shreds(
+                        shreds,
+                        ValidateInsertShred::Skip,
+                        &mut pinnable_slice,
+                        &mut write_batch,
+                    )
                     .is_err()
                 {
                     warn!("error inserting shreds for slot {slot}");

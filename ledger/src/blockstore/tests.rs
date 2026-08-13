@@ -1875,7 +1875,7 @@ fn test_merkle_root_metas_coding() {
         .check_insert_coding_shred(
             Cow::Borrowed(&coding_shred),
             &mut shred_insertion_tracker,
-            false,
+            ValidateInsertShred::Validate,
             ShredSource::Turbine,
             &mut pinnable_slice,
         )
@@ -1933,7 +1933,7 @@ fn test_merkle_root_metas_coding() {
         blockstore.check_insert_coding_shred(
             Cow::Owned(new_coding_shred),
             &mut shred_insertion_tracker,
-            false,
+            ValidateInsertShred::Validate,
             ShredSource::Turbine,
             &mut pinnable_slice,
         ),
@@ -1999,7 +1999,7 @@ fn test_merkle_root_metas_coding() {
         .check_insert_coding_shred(
             Cow::Borrowed(&new_coding_shred),
             &mut shred_insertion_tracker,
-            false,
+            ValidateInsertShred::Validate,
             ShredSource::Turbine,
             &mut pinnable_slice,
         )
@@ -2068,7 +2068,7 @@ fn test_merkle_root_metas_data() {
             Cow::Borrowed(&data_shred),
             BlockLocation::Original,
             &mut shred_insertion_tracker,
-            false,
+            ValidateInsertShred::Validate,
             ShredSource::Turbine,
             &mut pinnable_slice,
         )
@@ -2125,7 +2125,7 @@ fn test_merkle_root_metas_data() {
         Cow::Owned(new_data_shred),
         BlockLocation::Original,
         &mut shred_insertion_tracker,
-        false,
+        ValidateInsertShred::Validate,
         ShredSource::Turbine,
         &mut pinnable_slice,
     );
@@ -2221,7 +2221,7 @@ fn test_merkle_root_metas_data() {
             Cow::Borrowed(&new_data_shred),
             BlockLocation::Original,
             &mut shred_insertion_tracker,
-            false,
+            ValidateInsertShred::Validate,
             ShredSource::Turbine,
             &mut pinnable_slice,
         )
@@ -2295,7 +2295,7 @@ fn test_check_insert_coding_shred() {
         .check_insert_coding_shred(
             Cow::Borrowed(&coding_shred),
             &mut shred_insertion_tracker,
-            false,
+            ValidateInsertShred::Validate,
             ShredSource::Turbine,
             &mut pinnable_slice,
         )
@@ -2306,7 +2306,7 @@ fn test_check_insert_coding_shred() {
         blockstore.check_insert_coding_shred(
             Cow::Borrowed(&coding_shred),
             &mut shred_insertion_tracker,
-            false,
+            ValidateInsertShred::Validate,
             ShredSource::Turbine,
             &mut pinnable_slice,
         ),
@@ -4679,7 +4679,7 @@ fn test_recovery() {
     blockstore
         .do_insert_shreds(
             coding_shreds,
-            false, // is_trusted
+            ValidateInsertShred::Validate,
             Some(&mut ShredRecoveryContext::new(
                 ReedSolomonCache::default(),
                 dummy_retransmit_sender,
@@ -4730,7 +4730,7 @@ fn test_skip_alt_recovery() {
                 /*is_repaired:*/ false,
                 BlockLocation::Original,
             )),
-            false, // is_trusted
+            ValidateInsertShred::Validate,
             None,
             &mut pinnable_slice,
             &mut write_batch,
@@ -4753,7 +4753,7 @@ fn test_skip_alt_recovery() {
                 /*is_repaired:*/ true,
                 alternate_location,
             )),
-            false, // is_trusted
+            ValidateInsertShred::Validate,
             Some(&mut ShredRecoveryContext::new(
                 ReedSolomonCache::default(),
                 dummy_retransmit_sender,
@@ -4853,7 +4853,7 @@ fn test_recovery_discards_unexpected_data_complete_shreds() {
     blockstore
         .do_insert_shreds(
             shreds,
-            false, // is_trusted
+            ValidateInsertShred::Validate,
             Some(&mut ShredRecoveryContext::new(
                 reed_solomon_cache,
                 dummy_retransmit_sender,
@@ -6452,7 +6452,7 @@ fn test_get_double_merkle_root(use_alternate_location: bool) {
     let insert_results = blockstore
         .do_insert_shreds(
             shreds,
-            false,
+            ValidateInsertShred::Validate,
             None,
             &mut pinnable_slice,
             &mut write_batch,
@@ -6550,7 +6550,7 @@ fn test_get_double_merkle_root(use_alternate_location: bool) {
     let insert_results = blockstore
         .do_insert_shreds(
             shreds,
-            false,
+            ValidateInsertShred::Validate,
             None,
             &mut pinnable_slice,
             &mut write_batch,
@@ -6583,7 +6583,7 @@ fn insert_test_block_at_location(
     let insert_results = blockstore
         .do_insert_shreds(
             shreds,
-            false,
+            ValidateInsertShred::Validate,
             None,
             &mut pinnable_slice,
             &mut write_batch,
@@ -6718,7 +6718,7 @@ fn test_get_data_shreds_for_slot() {
         let insert_results = blockstore
             .do_insert_shreds(
                 shreds,
-                false,
+                ValidateInsertShred::Validate,
                 None,
                 &mut pinnable_slice,
                 &mut write_batch,

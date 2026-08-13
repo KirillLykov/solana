@@ -214,6 +214,18 @@ pub struct SignatureInfosForAddress {
     pub found_until: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ValidateInsertShred {
+    Validate,
+    Skip,
+}
+
+impl ValidateInsertShred {
+    fn should_validate(self) -> bool {
+        matches!(self, Self::Validate)
+    }
+}
+
 #[derive(Error, Debug)]
 enum InsertDataShredError {
     #[error("Data shred already exists in Blockstore")]
@@ -1644,7 +1656,7 @@ impl Blockstore {
             Item = (Cow<'a, Shred>, /*is_repaired:*/ bool, BlockLocation),
             IntoIter: ExactSizeIterator,
         >,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         pinnable_slice: &mut DBPinnableSlice<'db>,
         shred_insertion_tracker: &mut ShredInsertionTracker<'a, '_>,
         metrics: &mut BlockstoreInsertionMetrics,
@@ -1665,7 +1677,7 @@ impl Blockstore {
                         shred,
                         location,
                         shred_insertion_tracker,
-                        is_trusted,
+                        validate_insert_shred,
                         shred_source,
                         pinnable_slice,
                     ) {
@@ -1703,7 +1715,7 @@ impl Blockstore {
                     match self.check_insert_coding_shred(
                         shred,
                         shred_insertion_tracker,
-                        is_trusted,
+                        validate_insert_shred,
                         shred_source,
                         pinnable_slice,
                     ) {
@@ -1811,7 +1823,7 @@ impl Blockstore {
         shred_recovery_context: &mut ShredRecoveryContext,
         pinnable_slice: &mut DBPinnableSlice<'db>,
         shred_insertion_tracker: &mut ShredInsertionTracker,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         metrics: &mut BlockstoreInsertionMetrics,
     ) {
         let mut start = Measure::start("Shred recovery");
@@ -1830,7 +1842,7 @@ impl Blockstore {
                 Cow::Owned(shred),
                 BlockLocation::Original,
                 shred_insertion_tracker,
-                is_trusted,
+                validate_insert_shred,
                 ShredSource::Recovered,
                 pinnable_slice,
             ) {
@@ -2198,9 +2210,8 @@ impl Blockstore {
     /// Arguments:
     ///  - `shreds`: the shreds to be inserted, alongside their repaired flag and
     ///    insertion location.
-    ///  - `is_trusted`: whether the shreds come from a trusted source. If this
-    ///    is set to true, then the function will skip the shred duplication and
-    ///    integrity checks.
+    ///  - `validate_insert_shred`: whether duplicate and integrity checks should
+    ///    be applied before inserting shreds.
     ///  - `shred_recovery_context`: recovery-time dependencies and policy for
     ///    erasure recovery. `None` disables recovery.
     ///  - `pinnable_slice`: reusable RocksDB pinnable slice.
@@ -2216,7 +2227,7 @@ impl Blockstore {
             Item = (Cow<'a, Shred>, /*is_repaired:*/ bool, BlockLocation),
             IntoIter: ExactSizeIterator,
         >,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         // When inserting own shreds during leader slots, we shouldn't try to
         // recover shreds. If shreds are not to be recovered we don't need the
         // retransmit channel either. Otherwise, if we are inserting shreds
@@ -2239,7 +2250,7 @@ impl Blockstore {
         let result = self.do_insert_shreds_locked(
             &lock,
             shreds,
-            is_trusted,
+            validate_insert_shred,
             shred_recovery_context,
             pinnable_slice,
             write_batch,
@@ -2262,7 +2273,7 @@ impl Blockstore {
             Item = (Cow<'a, Shred>, /*is_repaired:*/ bool, BlockLocation),
             IntoIter: ExactSizeIterator,
         >,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         shred_recovery_context: Option<&mut ShredRecoveryContext>,
         pinnable_slice: &mut DBPinnableSlice<'db>,
         write_batch: &mut WriteBatch,
@@ -2273,7 +2284,7 @@ impl Blockstore {
 
         self.attempt_shred_insertion(
             shreds,
-            is_trusted,
+            validate_insert_shred,
             pinnable_slice,
             &mut shred_insertion_tracker,
             metrics,
@@ -2283,7 +2294,7 @@ impl Blockstore {
                 shred_recovery_context,
                 pinnable_slice,
                 &mut shred_insertion_tracker,
-                is_trusted,
+                validate_insert_shred,
                 metrics,
             );
         }
@@ -2344,7 +2355,7 @@ impl Blockstore {
             Item = (Cow<'a, Shred>, /*is_repaired:*/ bool),
             IntoIter: ExactSizeIterator,
         >,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         shred_recovery_context: &mut ShredRecoveryContext,
         handle_duplicate: &F,
         metrics: &mut BlockstoreInsertionMetrics,
@@ -2358,7 +2369,7 @@ impl Blockstore {
             shreds
                 .into_iter()
                 .map(|(shred, is_repaired)| (shred, is_repaired, BlockLocation::Original)),
-            is_trusted,
+            validate_insert_shred,
             shred_recovery_context,
             &mut pinnable_slice,
             &mut write_batch,
@@ -2379,7 +2390,7 @@ impl Blockstore {
             Item = (Cow<'a, Shred>, /*is_repaired:*/ bool, BlockLocation),
             IntoIter: ExactSizeIterator,
         >,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         shred_recovery_context: &mut ShredRecoveryContext,
         pinnable_slice: &mut DBPinnableSlice<'db>,
         write_batch: &mut WriteBatch,
@@ -2394,7 +2405,7 @@ impl Blockstore {
             duplicate_shreds,
         } = self.do_insert_shreds(
             shreds,
-            is_trusted,
+            validate_insert_shred,
             Some(shred_recovery_context),
             pinnable_slice,
             write_batch,
@@ -2488,7 +2499,7 @@ impl Blockstore {
         self.do_insert_shreds_locked(
             lock,
             shreds,
-            true, // is_trusted
+            ValidateInsertShred::Skip,
             None, // should_recover_shreds
             pinnable_slice,
             &mut write_batch,
@@ -2592,12 +2603,12 @@ impl Blockstore {
         Ok(())
     }
 
-    // Bypasses erasure recovery becuase it is called from broadcast stage
+    // Bypasses erasure recovery because it is called from broadcast stage
     // when inserting own shreds during leader slots. Stores all shreds in the original column.
     pub fn insert_cow_shreds<'a, 'db>(
         &'db self,
         shreds: impl IntoIterator<Item = Cow<'a, Shred>, IntoIter: ExactSizeIterator>,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         pinnable_slice: &mut DBPinnableSlice<'db>,
         write_batch: &mut WriteBatch,
     ) -> Result<Vec<CompletedDataSetInfo>> {
@@ -2606,7 +2617,7 @@ impl Blockstore {
             .map(|shred| (shred, /*is_repaired:*/ false, BlockLocation::Original));
         let insert_results = self.do_insert_shreds(
             shreds,
-            is_trusted,
+            validate_insert_shred,
             None, // Skip recovery for locally produced shreds.
             pinnable_slice,
             write_batch,
@@ -2624,7 +2635,17 @@ impl Blockstore {
         let mut pinnable_slice = self.new_pinnable_slice();
         let mut write_batch = self.get_write_batch();
         let shreds = shreds.into_iter().map(Cow::Owned);
-        self.insert_cow_shreds(shreds, is_trusted, &mut pinnable_slice, &mut write_batch)
+        let validate_insert_shred = if is_trusted {
+            ValidateInsertShred::Skip
+        } else {
+            ValidateInsertShred::Validate
+        };
+        self.insert_cow_shreds(
+            shreds,
+            validate_insert_shred,
+            &mut pinnable_slice,
+            &mut write_batch,
+        )
     }
 
     #[cfg(test)]
@@ -2638,7 +2659,7 @@ impl Blockstore {
                     /*is_repaired:*/ false,
                     BlockLocation::Original,
                 )],
-                false,
+                ValidateInsertShred::Validate,
                 None, // Skip recovery for this direct insertion path.
                 &mut pinnable_slice,
                 &mut write_batch,
@@ -2666,14 +2687,15 @@ impl Blockstore {
     /// Arguments:
     /// - `shred`: the coding shred to insert.
     /// - `shred_insertion_tracker`: collection of shred insertion tracking data.
-    /// - `is_trusted`: if false, duplicate and integrity checks are applied.
+    /// - `validate_insert_shred`: whether duplicate and integrity checks should
+    ///   be applied before insertion.
     /// - `shred_source`: the source of the shred.
     /// - `pinnable_slice`: reusable RocksDB pinnable slice.
     fn check_insert_coding_shred<'a, 'db>(
         &'db self,
         shred: Cow<'a, Shred>,
         shred_insertion_tracker: &mut ShredInsertionTracker<'a, '_>,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         shred_source: ShredSource,
         pinnable_slice: &mut DBPinnableSlice<'db>,
     ) -> std::result::Result<(), InsertCodingShredError> {
@@ -2714,7 +2736,7 @@ impl Blockstore {
 
         // This gives the index of first coding shred in this FEC block
         // So, all coding shreds in a given FEC block will have the same set index
-        if !is_trusted {
+        if validate_insert_shred.should_validate() {
             if index_meta.coding().contains(shred_index) {
                 duplicate_shreds.push(PossibleDuplicateShred::Exists(shred.into_owned()));
                 return Err(InsertCodingShredError::Exists);
@@ -2890,8 +2912,8 @@ impl Blockstore {
     /// - `location`: the location to insert into
     /// - `shred_insertion_tracker`: collection of shred insertion tracking
     ///   data.
-    /// - `is_trusted`: if false, this function will check whether the
-    ///   input shred is duplicate.
+    /// - `validate_insert_shred`: whether duplicate and integrity checks should
+    ///   be applied before insertion.
     /// - `shred_source`: the source of the shred.
     /// - `pinnable_slice`: reusable RocksDB pinnable slice.
     fn check_insert_data_shred<'a, 'db>(
@@ -2899,7 +2921,7 @@ impl Blockstore {
         shred: Cow<'a, Shred>,
         location: BlockLocation,
         shred_insertion_tracker: &mut ShredInsertionTracker<'a, '_>,
-        is_trusted: bool,
+        validate_insert_shred: ValidateInsertShred,
         shred_source: ShredSource,
         pinnable_slice: &mut DBPinnableSlice<'db>,
     ) -> std::result::Result<(), InsertDataShredError> {
@@ -2961,7 +2983,7 @@ impl Blockstore {
             entry.insert(WorkingEntry::Clean(meta));
         }
 
-        if !is_trusted {
+        if validate_insert_shred.should_validate() {
             if Self::is_data_shred_present(&shred, slot_meta, index_meta.data()) {
                 duplicate_shreds.push(PossibleDuplicateShred::Exists(shred.into_owned()));
                 return Err(InsertDataShredError::Exists);

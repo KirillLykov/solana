@@ -51,7 +51,9 @@ use {
     solana_instruction::TRANSACTION_LEVEL_STACK_HEIGHT,
     solana_keypair::{Keypair, keypair_from_seed},
     solana_ledger::{
-        blockstore::{Blockstore, PurgeType, banking_trace_path, create_new_ledger},
+        blockstore::{
+            Blockstore, PurgeType, ValidateInsertShred, banking_trace_path, create_new_ledger,
+        },
         blockstore_options::{AccessType, BLOCKSTORE_DIRECTORY_ROCKS_LEVEL, LedgerColumnOptions},
         blockstore_processor::ProcessSlotCallback,
         shred::{ProcessShredsStats, ReedSolomonCache, Shred, Shredder},
@@ -2445,7 +2447,7 @@ fn main() {
                             let _ = backup_blockstore
                                 .insert_cow_shreds(
                                     shreds.into_iter().map(Cow::Owned),
-                                    true,
+                                    ValidateInsertShred::Skip,
                                     &mut pinnable_slice,
                                     &mut write_batch,
                                 )
@@ -2491,7 +2493,12 @@ fn main() {
                         let mut pinnable_slice = rw_blockstore.new_pinnable_slice();
                         let mut write_batch = rw_blockstore.get_write_batch();
                         rw_blockstore
-                            .insert_cow_shreds(shreds, true, &mut pinnable_slice, &mut write_batch)
+                            .insert_cow_shreds(
+                                shreds,
+                                ValidateInsertShred::Skip,
+                                &mut pinnable_slice,
+                                &mut write_batch,
+                            )
                             .expect("Blockstore operation must succeed");
                     }
 

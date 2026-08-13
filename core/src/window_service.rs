@@ -19,7 +19,9 @@ use {
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
-        blockstore::{Blockstore, BlockstoreInsertionMetrics, PossibleDuplicateShred},
+        blockstore::{
+            Blockstore, BlockstoreInsertionMetrics, PossibleDuplicateShred, ValidateInsertShred,
+        },
         blockstore_db::{DBPinnableSlice, WriteBatch},
         blockstore_meta::BlockLocation,
         shred::{self, ReedSolomonCache, Shred, filter::ShredRecoveryContext},
@@ -248,7 +250,7 @@ where
     ws_metrics.num_shreds_received += shreds.len();
     let completed_data_sets = blockstore.insert_shreds_at_location_handle_duplicate(
         shreds,
-        false, // is_trusted
+        ValidateInsertShred::Validate,
         shred_recovery_context,
         pinnable_slice,
         write_batch,
@@ -691,7 +693,7 @@ mod test {
             blockstore
                 .insert_shreds_handle_duplicate(
                     shreds,
-                    false, // is_trusted
+                    ValidateInsertShred::Validate,
                     &mut ShredRecoveryContext::new(
                         ReedSolomonCache::default(),
                         dummy_retransmit_sender,

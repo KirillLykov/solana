@@ -8,6 +8,7 @@ use {
     solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_hash::Hash,
     solana_keypair::Keypair,
+    solana_ledger::blockstore::ValidateInsertShred,
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
     solana_signature::Signature,
     solana_signer::Signer,
@@ -455,7 +456,7 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         blockstore
             .insert_cow_shreds(
                 all_shreds.iter().map(Cow::Borrowed),
-                true,
+                ValidateInsertShred::Skip,
                 pinnable_slice,
                 write_batch,
             )

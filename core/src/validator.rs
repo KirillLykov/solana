@@ -84,7 +84,8 @@ use {
         bank_forks_utils,
         blockstore::{
             Blockstore, BlockstoreError, MAX_COMPLETED_SLOTS_IN_CHANNEL,
-            MAX_REPLAY_WAKE_UP_SIGNALS, MAX_UPDATE_PARENT_SIGNALS, PurgeType, UpdateParentReceiver,
+            MAX_REPLAY_WAKE_UP_SIGNALS, MAX_UPDATE_PARENT_SIGNALS, PurgeType,
+            UpdateParentReceiver, ValidateInsertShred,
         },
         blockstore_metric_report_service::BlockstoreMetricReportService,
         blockstore_options::{
@@ -2897,7 +2898,7 @@ fn cleanup_blockstore_incorrect_shred_versions(
                 let shreds = shreds.into_iter().map(Cow::Owned);
                 let _ = backup_blockstore.insert_cow_shreds(
                     shreds,
-                    true,
+                    ValidateInsertShred::Skip,
                     &mut pinnable_slice,
                     &mut write_batch,
                 );

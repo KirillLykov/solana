@@ -15,6 +15,7 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{
+        blockstore::ValidateInsertShred,
         leader_schedule_cache::LeaderScheduleCache,
         shred::{
             ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder,
@@ -460,7 +461,7 @@ impl StandardBroadcastRun {
             blockstore
                 .insert_cow_shreds(
                     [Cow::Borrowed(shred)],
-                    true, // is_trusted
+                    ValidateInsertShred::Skip,
                     pinnable_slice,
                     write_batch,
                 )
@@ -555,7 +556,7 @@ impl StandardBroadcastRun {
         blockstore
             .insert_cow_shreds(
                 shreds,
-                /*is_trusted:*/ true,
+                ValidateInsertShred::Skip,
                 pinnable_slice,
                 write_batch,
             )
