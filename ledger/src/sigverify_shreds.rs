@@ -1,7 +1,6 @@
 #![allow(clippy::implicit_hasher)]
 use {
     crate::shred,
-    rayon::prelude::*,
     solana_clock::Slot,
     solana_nohash_hasher::BuildNoHashHasher,
     solana_perf::packet::{PacketBatch, PacketRef},
@@ -51,13 +50,13 @@ pub fn verify_shred_cpu(packet: PacketRef, slot_leaders: &SlotPubkeys) -> bool {
 }
 
 pub fn par_verify_shreds(batches: &mut [PacketBatch], slot_leaders: &SlotPubkeys) {
-    batches.par_iter_mut().for_each(|batch| {
-        batch.par_iter_mut().for_each(|mut packet| {
+    for batch in batches {
+        for mut packet in batch.iter_mut() {
             if !packet.meta().discard() && !verify_shred_cpu(packet.as_ref(), slot_leaders) {
                 packet.meta_mut().set_discard(true);
             }
-        });
-    });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -91,7 +90,6 @@ mod tests {
         assert_matches::assert_matches,
         itertools::Itertools,
         rand::{Rng, seq::SliceRandom},
-        rayon::{ThreadPool, ThreadPoolBuilder},
         solana_entry::entry::Entry,
         solana_hash::Hash,
         solana_keypair::Keypair,
@@ -104,24 +102,16 @@ mod tests {
         test_case::test_case,
     };
 
-    fn verify_shreds(
-        thread_pool: &ThreadPool,
-        batches: &mut [PacketBatch],
-        slot_leaders: &SlotPubkeys,
-    ) {
-        thread_pool.install(|| {
-            par_verify_shreds(batches, slot_leaders);
-        });
+    fn verify_shreds(batches: &mut [PacketBatch], slot_leaders: &SlotPubkeys) {
+        par_verify_shreds(batches, slot_leaders);
     }
 
-    fn sign_shreds(thread_pool: &ThreadPool, keypair: &Keypair, batches: &mut [PacketBatch]) {
-        thread_pool.install(|| {
-            batches.par_iter_mut().for_each(|batch| {
-                batch
-                    .par_iter_mut()
-                    .for_each(|mut p| sign_shred_cpu(keypair, &mut p));
-            });
-        });
+    fn sign_shreds(keypair: &Keypair, batches: &mut [PacketBatch]) {
+        for batch in batches {
+            for mut packet in batch.iter_mut() {
+                sign_shred_cpu(keypair, &mut packet);
+            }
+        }
     }
 
     fn run_test_sigverify_shred_cpu(slot: Slot) {
@@ -162,13 +152,13 @@ mod tests {
         run_test_sigverify_shred_cpu(0xdead_c0de);
     }
 
-    fn run_test_sigverify_shreds_cpu(thread_pool: &ThreadPool, slot: Slot) {
+    fn run_test_sigverify_shreds_cpu(slot: Slot) {
         agave_logger::setup();
         let keypair = Keypair::new();
 
         let leader_slots: SlotPubkeys = [(slot, keypair.pubkey())].into_iter().collect();
         let mut batches = [make_packet_batch(&keypair, slot)];
-        verify_shreds(thread_pool, &mut batches, &leader_slots);
+        verify_shreds(&mut batches, &leader_slots);
         assert!(
             batches
                 .iter()
@@ -179,7 +169,7 @@ mod tests {
         let wrong_keypair = Keypair::new();
         let leader_slots: SlotPubkeys = [(slot, wrong_keypair.pubkey())].into_iter().collect();
         let mut batches = [make_packet_batch(&keypair, slot)];
-        verify_shreds(thread_pool, &mut batches, &leader_slots);
+        verify_shreds(&mut batches, &leader_slots);
         assert!(
             batches
                 .iter()
@@ -189,7 +179,7 @@ mod tests {
 
         let leader_slots: SlotPubkeys = HashMap::default();
         let mut batches = [make_packet_batch(&keypair, slot)];
-        verify_shreds(thread_pool, &mut batches, &leader_slots);
+        verify_shreds(&mut batches, &leader_slots);
         assert!(
             batches
                 .iter()
@@ -202,7 +192,7 @@ mod tests {
         batches[0]
             .iter_mut()
             .for_each(|mut packet_ref| packet_ref.meta_mut().size = 0);
-        verify_shreds(thread_pool, &mut batches, &leader_slots);
+        verify_shreds(&mut batches, &leader_slots);
         assert!(
             batches
                 .iter()
@@ -213,11 +203,10 @@ mod tests {
 
     #[test]
     fn test_sigverify_shreds_cpu() {
-        let thread_pool = ThreadPoolBuilder::new().num_threads(3).build().unwrap();
-        run_test_sigverify_shreds_cpu(&thread_pool, 0xdead_c0de);
+        run_test_sigverify_shreds_cpu(0xdead_c0de);
     }
 
-    fn run_test_sigverify_shreds(thread_pool: &ThreadPool, slot: Slot) {
+    fn run_test_sigverify_shreds(slot: Slot) {
         agave_logger::setup();
 
         let keypair = Keypair::new();
@@ -225,7 +214,7 @@ mod tests {
             .into_iter()
             .collect();
         let mut batches = [make_packet_batch(&keypair, slot)];
-        verify_shreds(thread_pool, &mut batches, &leader_slots);
+        verify_shreds(&mut batches, &leader_slots);
         assert!(
             batches
                 .iter()
@@ -241,7 +230,7 @@ mod tests {
         .into_iter()
         .collect();
         let mut batches = [make_packet_batch(&keypair, slot)];
-        verify_shreds(thread_pool, &mut batches, &leader_slots);
+        verify_shreds(&mut batches, &leader_slots);
         assert!(
             batches
                 .iter()
@@ -251,7 +240,7 @@ mod tests {
 
         let leader_slots: SlotPubkeys = [(u64::MAX, Pubkey::default())].into_iter().collect();
         let mut batches = [make_packet_batch(&keypair, slot)];
-        verify_shreds(thread_pool, &mut batches, &leader_slots);
+        verify_shreds(&mut batches, &leader_slots);
         assert!(
             batches
                 .iter()
@@ -266,7 +255,7 @@ mod tests {
         let leader_slots: SlotPubkeys = [(u64::MAX, Pubkey::default()), (slot, keypair.pubkey())]
             .into_iter()
             .collect();
-        verify_shreds(thread_pool, &mut batches, &leader_slots);
+        verify_shreds(&mut batches, &leader_slots);
         assert!(
             batches
                 .iter()
@@ -299,8 +288,7 @@ mod tests {
 
     #[test]
     fn test_sigverify_shreds() {
-        let thread_pool = ThreadPoolBuilder::new().num_threads(3).build().unwrap();
-        run_test_sigverify_shreds(&thread_pool, 0xdead_c0de);
+        run_test_sigverify_shreds(0xdead_c0de);
     }
 
     fn make_transaction<R: Rng>(rng: &mut R) -> Transaction {
@@ -406,7 +394,6 @@ mod tests {
     #[test_case(false)]
     fn test_verify_shreds_fuzz(is_last_in_slot: bool) {
         let mut rng = rand::rng();
-        let thread_pool = ThreadPoolBuilder::new().num_threads(3).build().unwrap();
         let keypairs = repeat_with(|| rng.random_range(169_367_809..169_906_789))
             .map(|slot| (slot, Keypair::new()))
             .take(3)
@@ -418,7 +405,7 @@ mod tests {
             .chain(once((Slot::MAX, Pubkey::default())))
             .collect();
         let mut packets = make_packets(&mut rng, &shreds);
-        verify_shreds(&thread_pool, &mut packets, &pubkeys);
+        verify_shreds(&mut packets, &pubkeys);
         assert!(
             packets
                 .iter()
@@ -444,7 +431,7 @@ mod tests {
                     .collect::<Vec<bool>>()
             })
             .collect::<Vec<_>>();
-        verify_shreds(&thread_pool, &mut packets, &pubkeys);
+        verify_shreds(&mut packets, &pubkeys);
         assert!(
             packets
                 .iter()
@@ -462,7 +449,6 @@ mod tests {
     #[test_case(false)]
     fn test_sign_shreds(is_last_in_slot: bool) {
         let mut rng = rand::rng();
-        let thread_pool = ThreadPoolBuilder::new().num_threads(3).build().unwrap();
         let shreds = {
             let keypairs = repeat_with(|| rng.random_range(169_367_809..169_906_789))
                 .map(|slot| (slot, Keypair::new()))
@@ -482,7 +468,7 @@ mod tests {
         };
         let mut packets = make_packets(&mut rng, &shreds);
         // Assert that initially all signatures are invalid.
-        verify_shreds(&thread_pool, &mut packets, &pubkeys);
+        verify_shreds(&mut packets, &pubkeys);
         assert!(
             packets
                 .iter()
@@ -495,8 +481,8 @@ mod tests {
                 .iter_mut()
                 .for_each(|mut packet| packet.meta_mut().set_discard(false));
         });
-        sign_shreds(&thread_pool, &keypair, &mut packets);
-        verify_shreds(&thread_pool, &mut packets, &pubkeys);
+        sign_shreds(&keypair, &mut packets);
+        verify_shreds(&mut packets, &pubkeys);
         assert!(
             packets
                 .iter()
