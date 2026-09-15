@@ -55,6 +55,12 @@ const DEDUPER_NUM_BITS: u64 = 637_534_199; // 76MB
 const DEDUPER_RESET_CYCLE: Duration = Duration::from_secs(5 * 60);
 // Minimum number of shreds to use rayon parallel iterators.
 const PAR_ITER_MIN_NUM_SHREDS: usize = 2;
+const RETRANSMIT_SHRED_TIMING_BUCKETS_US: [u64; 39] = [
+    10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200, 225, 250, 275, 300, 350,
+    400, 450, 500, 600, 700, 800, 900, 1_000, 1_250, 1_500, 2_000, 2_500, 5_000, 10_000, 25_000,
+    50_000, 100_000, 1_000_000,
+];
+const RETRANSMIT_SHRED_TIMING_NUM_BUCKETS: usize = RETRANSMIT_SHRED_TIMING_BUCKETS_US.len() + 1;
 
 const _: () = const {
     // From https://github.com/anza-xyz/agave/pull/1735#discussion_r1644899183:
@@ -78,6 +84,29 @@ struct RetransmitShredOutput {
     num_nodes: usize,
     // Addresses the shred was sent to if there was a cache miss.
     addrs: Option<Arc<[SocketAddr]>>,
+    timing: RetransmitShredTiming,
+}
+
+#[derive(Clone, Copy)]
+struct RetransmitShredTiming {
+    receive_to_send_us: u64,
+}
+
+struct RetransmitBatchStats {
+    slot_stats: HashMap<Slot, RetransmitSlotStats>,
+    timings: RetransmitTimingHistograms,
+}
+
+struct RetransmitTimingHistograms {
+    receive_to_send_us: RetransmitTimingBuckets,
+}
+
+struct RetransmitTimingBuckets {
+    count: u64,
+    sum: u128,
+    min: u64,
+    max: u64,
+    buckets: [u64; RETRANSMIT_SHRED_TIMING_NUM_BUCKETS],
 }
 
 #[derive(Default)]
@@ -115,6 +144,7 @@ struct RetransmitStats {
     epoch_cache_update: u64,
     retransmit_total: AtomicU64,
     compute_turbine_peers_total: AtomicU64,
+    timings: RetransmitTimingHistograms,
     slot_stats: LruCache<Slot, RetransmitSlotStats>,
     unknown_shred_slot_leader: usize,
 }
@@ -122,7 +152,7 @@ struct RetransmitStats {
 struct RetransmitState {
     stats: RetransmitStats,
     addr_cache: AddrCache,
-    shred_buf: Vec<Vec<shred::Payload>>,
+    shred_buf: Vec<(Instant, Vec<shred::Payload>)>,
     pending_first_shred_event: Option<VotorEvent>,
 }
 
@@ -145,6 +175,147 @@ struct RetransmitContext {
     shred_deduper: ShredDeduper,
     max_slots: Arc<MaxSlots>,
     notifiers: RetransmitNotifiers,
+}
+
+impl RetransmitBatchStats {
+    fn new() -> Self {
+        Self {
+            slot_stats: HashMap::new(),
+            timings: RetransmitTimingHistograms::new(),
+        }
+    }
+
+    fn record(mut self, out: RetransmitShredOutput) -> Self {
+        let now = timestamp();
+        self.timings.record(out.timing);
+        let entry = self.slot_stats.entry(out.shred.slot()).or_default();
+        entry.record(now, out);
+        self
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        self.slot_stats = RetransmitSlotStats::merge(self.slot_stats, other.slot_stats);
+        self.timings.merge(&other.timings);
+        self
+    }
+}
+
+impl RetransmitTimingHistograms {
+    fn new() -> Self {
+        Self {
+            receive_to_send_us: RetransmitTimingBuckets::default(),
+        }
+    }
+
+    fn record(&mut self, timing: RetransmitShredTiming) {
+        self.receive_to_send_us.record(timing.receive_to_send_us);
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.receive_to_send_us.merge(&other.receive_to_send_us);
+    }
+
+    fn submit(&self) {
+        if self.receive_to_send_us.count == 0 {
+            return;
+        }
+        datapoint_info!(
+            "retransmit-stage-shred-timing",
+            (
+                "receive_to_send_us_count",
+                self.receive_to_send_us.count,
+                i64
+            ),
+            ("receive_to_send_us_min", self.receive_to_send_us.min, i64),
+            (
+                "receive_to_send_us_mean",
+                self.receive_to_send_us.mean(),
+                i64
+            ),
+            ("receive_to_send_us_max", self.receive_to_send_us.max, i64),
+            (
+                "receive_to_send_us_50pct",
+                self.receive_to_send_us.percentile_upper_bound(50),
+                i64
+            ),
+            (
+                "receive_to_send_us_90pct",
+                self.receive_to_send_us.percentile_upper_bound(90),
+                i64
+            ),
+            (
+                "receive_to_send_us_95pct",
+                self.receive_to_send_us.percentile_upper_bound(95),
+                i64
+            ),
+            (
+                "receive_to_send_us_99pct",
+                self.receive_to_send_us.percentile_upper_bound(99),
+                i64
+            ),
+        );
+    }
+}
+
+impl Default for RetransmitTimingBuckets {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            sum: 0,
+            min: u64::MAX,
+            max: 0,
+            buckets: [0; RETRANSMIT_SHRED_TIMING_NUM_BUCKETS],
+        }
+    }
+}
+
+impl RetransmitTimingBuckets {
+    fn record(&mut self, value: u64) {
+        self.count = self.count.saturating_add(1);
+        self.sum = self.sum.saturating_add(u128::from(value));
+        self.min = self.min.min(value);
+        self.max = self.max.max(value);
+        let bucket = RETRANSMIT_SHRED_TIMING_BUCKETS_US.partition_point(|&upper| value > upper);
+        self.buckets[bucket] = self.buckets[bucket].saturating_add(1);
+    }
+
+    fn merge(&mut self, other: &Self) {
+        if other.count == 0 {
+            return;
+        }
+        self.count = self.count.saturating_add(other.count);
+        self.sum = self.sum.saturating_add(other.sum);
+        self.min = self.min.min(other.min);
+        self.max = self.max.max(other.max);
+        for (bucket, other_bucket) in self.buckets.iter_mut().zip(other.buckets) {
+            *bucket = bucket.saturating_add(other_bucket);
+        }
+    }
+
+    fn mean(&self) -> u64 {
+        self.sum
+            .checked_div(u128::from(self.count))
+            .and_then(|mean| u64::try_from(mean).ok())
+            .unwrap_or_default()
+    }
+
+    fn percentile_upper_bound(&self, percentile: u64) -> u64 {
+        if self.count == 0 {
+            return 0;
+        }
+        let target = self.count.saturating_mul(percentile).saturating_add(99) / 100;
+        let mut cumulative = 0u64;
+        for (index, count) in self.buckets.iter().copied().enumerate() {
+            cumulative = cumulative.saturating_add(count);
+            if cumulative >= target {
+                return RETRANSMIT_SHRED_TIMING_BUCKETS_US
+                    .get(index)
+                    .copied()
+                    .unwrap_or(self.max);
+            }
+        }
+        self.max
+    }
 }
 
 impl RetransmitState {
@@ -210,6 +381,7 @@ impl RetransmitStats {
                 i64
             ),
         );
+        self.timings.submit();
         // slot_stats are submitted at a different cadence.
         let old = std::mem::replace(self, Self::new(Instant::now()));
         self.slot_stats = old.slot_stats;
@@ -349,7 +521,7 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
     // made then block on the channel until some shreds are received.
     match retransmit_receiver.try_recv() {
         Ok(shreds) => {
-            shred_buf.push(shreds);
+            shred_buf.push((Instant::now(), shreds));
         }
         Err(TryRecvError::Disconnected) => return Err(()),
         Err(TryRecvError::Empty) => {
@@ -363,12 +535,13 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
             ) {
                 return Ok(());
             }
-            shred_buf.push(retransmit_receiver.recv().map_err(|_| ())?);
+            let shreds = retransmit_receiver.recv().map_err(|_| ())?;
+            shred_buf.push((Instant::now(), shreds));
         }
     };
     // now the batch has started
     let mut timer_start = Measure::start("retransmit");
-    let mut num_shreds = shred_buf[0].len();
+    let mut num_shreds = shred_buf[0].1.len();
     // Create a RETRANSMIT_BATCH_SIZE sized batch from the channel
     for shreds in retransmit_receiver
         .try_iter()
@@ -376,7 +549,7 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
         .take(RETRANSMIT_BATCH_SIZE - 1)
     {
         num_shreds += shreds.len();
-        shred_buf.push(shreds);
+        shred_buf.push((Instant::now(), shreds));
     }
 
     stats.num_shreds += num_shreds;
@@ -401,7 +574,7 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
     // Lookup slot leader and cluster nodes for each slot.
     let cache: HashMap<Slot, _> = shred_buf
         .iter()
-        .flatten()
+        .flat_map(|(_, shreds)| shreds)
         .filter_map(|shred| shred::layout::get_slot(shred))
         .collect::<HashSet<Slot>>()
         .into_iter()
@@ -423,15 +596,10 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
         })
         .collect();
     let socket_addr_space = cluster_info.socket_addr_space();
-    let record = |mut stats: HashMap<Slot, RetransmitSlotStats>, out: RetransmitShredOutput| {
-        let now = timestamp();
-        let entry = stats.entry(out.shred.slot()).or_default();
-        entry.record(now, out);
-        stats
-    };
-    let retransmit_shred = |shred, socket, stats| {
+    let retransmit_shred = |shred, received_at, socket, stats| {
         retransmit_shred(
             shred,
+            received_at,
             &root_bank,
             shred_deduper,
             &cache,
@@ -449,29 +617,37 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
         stats.num_small_batches += 1;
         shred_buf
             .drain(..)
-            .flatten()
+            .flat_map(|(received_at, shreds)| {
+                shreds.into_iter().map(move |shred| (received_at, shred))
+            })
             .enumerate()
-            .filter_map(|(index, shred)| retransmit_shred(shred, retransmit_socket(index), stats))
-            .fold(HashMap::new(), record)
+            .filter_map(|(index, (received_at, shred))| {
+                retransmit_shred(shred, received_at, retransmit_socket(index), stats)
+            })
+            .fold(RetransmitBatchStats::new(), RetransmitBatchStats::record)
     } else {
         thread_pool.install(|| {
             shred_buf
                 .par_drain(..)
-                .flatten()
-                .filter_map(|shred| {
+                .flat_map_iter(|(received_at, shreds)| {
+                    shreds.into_iter().map(move |shred| (received_at, shred))
+                })
+                .filter_map(|(received_at, shred)| {
                     retransmit_shred(
                         shred,
+                        received_at,
                         retransmit_socket(thread_pool.current_thread_index().unwrap()),
                         stats,
                     )
                 })
-                .fold(HashMap::new, record)
-                .reduce(HashMap::new, RetransmitSlotStats::merge)
+                .fold(RetransmitBatchStats::new, RetransmitBatchStats::record)
+                .reduce(RetransmitBatchStats::new, RetransmitBatchStats::merge)
         })
     };
+    stats.timings.merge(&slot_stats.timings);
 
     stats.upsert_slot_stats(
-        slot_stats,
+        slot_stats.slot_stats,
         root_bank.slot(),
         addr_cache,
         &context.notifiers,
@@ -492,6 +668,7 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
 // Retransmit a single shred to all downstream nodes
 fn retransmit_shred(
     shred: shred::Payload,
+    received_at: Instant,
     root_bank: &Bank,
     shred_deduper: &ShredDeduper,
     cache: &HashMap<Slot, (/*leader:*/ Pubkey, Arc<ClusterNodes<RetransmitStage>>)>,
@@ -564,6 +741,10 @@ fn retransmit_shred(
         addrs: match addrs {
             Cow::Owned(addrs) => Some(addrs),
             Cow::Borrowed(_) => None,
+        },
+        timing: RetransmitShredTiming {
+            receive_to_send_us: u64::try_from(received_at.elapsed().as_micros())
+                .unwrap_or(u64::MAX),
         },
     })
 }
@@ -792,6 +973,7 @@ impl RetransmitStats {
             epoch_cache_update: 0u64,
             retransmit_total: AtomicU64::default(),
             compute_turbine_peers_total: AtomicU64::default(),
+            timings: RetransmitTimingHistograms::new(),
             // Cache capacity is manually enforced by `SLOT_STATS_CACHE_CAPACITY`
             slot_stats: LruCache::<Slot, RetransmitSlotStats>::unbounded(),
             unknown_shred_slot_leader: 0usize,

@@ -11279,6 +11279,7 @@ dependencies = [
  "bs58",
  "bytes",
  "crossbeam-channel",
+ "histogram",
  "itertools 0.15.0",
  "lazy-lru",
  "log",

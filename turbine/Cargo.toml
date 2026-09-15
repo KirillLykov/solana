@@ -24,6 +24,7 @@ agave-votor = { workspace = true }
 agave-votor-messages = { workspace = true }
 bytes = { workspace = true }
 crossbeam-channel = { workspace = true }
+histogram = { workspace = true }
 itertools = { workspace = true }
 lazy-lru = { workspace = true }
 log = { workspace = true }
