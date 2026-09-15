@@ -151,7 +151,7 @@ struct RetransmitStats {
 
 struct RetransmitState {
     stats: RetransmitStats,
-    addr_cache: AddrCache,
+    //addr_cache: AddrCache,
     shred_buf: Vec<(Instant, Vec<shred::Payload>)>,
     pending_first_shred_event: Option<VotorEvent>,
 }
@@ -322,7 +322,7 @@ impl RetransmitState {
     fn new(now: Instant) -> Self {
         Self {
             stats: RetransmitStats::new(now),
-            addr_cache: AddrCache::with_capacity(/*capacity:*/ 4),
+            //addr_cache: AddrCache::with_capacity(/*capacity:*/ 4),
             shred_buf: Vec::with_capacity(RETRANSMIT_BATCH_SIZE),
             pending_first_shred_event: None,
         }
@@ -503,7 +503,7 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
     let max_slots = context.max_slots.as_ref();
     let RetransmitState {
         stats,
-        addr_cache,
+        //addr_cache,
         shred_buf,
         pending_first_shred_event,
     } = state;
@@ -525,16 +525,6 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
         }
         Err(TryRecvError::Disconnected) => return Err(()),
         Err(TryRecvError::Empty) => {
-            if cache_retransmit_addrs(
-                thread_pool,
-                addr_cache,
-                bank_forks,
-                leader_schedule_cache,
-                cluster_info,
-                cluster_nodes_cache,
-            ) {
-                return Ok(());
-            }
             let shreds = retransmit_receiver.recv().map_err(|_| ())?;
             shred_buf.push((Instant::now(), shreds));
         }
@@ -603,7 +593,7 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
             &root_bank,
             shred_deduper,
             &cache,
-            addr_cache,
+            //addr_cache,
             socket_addr_space,
             socket,
             stats,
@@ -649,7 +639,7 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
     stats.upsert_slot_stats(
         slot_stats.slot_stats,
         root_bank.slot(),
-        addr_cache,
+        //addr_cache,
         &context.notifiers,
         pending_first_shred_event,
     );
@@ -672,7 +662,7 @@ fn retransmit_shred(
     root_bank: &Bank,
     shred_deduper: &ShredDeduper,
     cache: &HashMap<Slot, (/*leader:*/ Pubkey, Arc<ClusterNodes<RetransmitStage>>)>,
-    addr_cache: &AddrCache,
+    //addr_cache: &AddrCache,
     socket_addr_space: &SocketAddrSpace,
     socket: RetransmitSocket<'_>,
     stats: &RetransmitStats,
@@ -686,7 +676,7 @@ fn retransmit_shred(
     }
     let mut compute_turbine_peers = Measure::start("turbine_start");
     let (root_distance, addrs) =
-        get_retransmit_addrs(&key, cache, addr_cache, socket_addr_space, stats)?;
+        get_retransmit_addrs(&key, cache, /*addr_cache,*/ socket_addr_space, stats)?;
     compute_turbine_peers.stop();
     stats
         .compute_turbine_peers_total
@@ -752,14 +742,14 @@ fn retransmit_shred(
 fn get_retransmit_addrs<'a>(
     shred: &ShredId,
     cache: &HashMap<Slot, (/*leader:*/ Pubkey, Arc<ClusterNodes<RetransmitStage>>)>,
-    addr_cache: &'a AddrCache,
+    //addr_cache: &'a AddrCache,
     socket_addr_space: &SocketAddrSpace,
     stats: &RetransmitStats,
 ) -> Option<(/*root_distance:*/ u8, Cow<'a, Arc<[SocketAddr]>>)> {
-    if let Some((root_distance, addrs)) = addr_cache.get(shred) {
-        stats.addr_cache_hit.fetch_add(1, Ordering::Relaxed);
-        return Some((root_distance, Cow::Borrowed(addrs)));
-    }
+    //if let Some((root_distance, addrs)) = addr_cache.get(shred) {
+    //    stats.addr_cache_hit.fetch_add(1, Ordering::Relaxed);
+    //    return Some((root_distance, Cow::Borrowed(addrs)));
+    //}
     let (slot_leader, cluster_nodes) = cache.get(&shred.slot())?;
     let (root_distance, addrs) = cluster_nodes
         .get_retransmit_addrs(slot_leader, shred, DATA_PLANE_FANOUT, socket_addr_space)
@@ -984,12 +974,12 @@ impl RetransmitStats {
         &mut self,
         feed: impl IntoIterator<Item = (Slot, RetransmitSlotStats)>,
         root: Slot,
-        addr_cache: &mut AddrCache,
+        //addr_cache: &mut AddrCache,
         notifiers: &RetransmitNotifiers,
         pending_first_shred_event: &mut Option<VotorEvent>,
     ) {
         for (slot, mut slot_stats) in feed {
-            addr_cache.record(slot, &mut slot_stats);
+            //addr_cache.record(slot, &mut slot_stats);
             match self.slot_stats.get_mut(&slot) {
                 None => {
                     if slot > root {
