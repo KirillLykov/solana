@@ -203,7 +203,7 @@ pub struct AlpenglowInitializationState {
     pub key_notifiers: Arc<RwLock<KeyUpdaters>>,
 
     // server sockets for Alpenglow consensus traffic
-    pub votor_server_sockets: Vec<UdpSocket>,
+    pub votor_server_sockets: Vec<QuicSocket>,
     // client socket for Alpenglow consensus traffic
     pub votor_client_socket: QuicSocket,
     // peers plugged into the votor peer_list regardless of stake
@@ -772,6 +772,7 @@ pub mod tests {
         solana_rpc::optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
         solana_runtime::{bank::Bank, bank_forks_controller::BankForksControllerHandle},
         solana_signer::Signer,
+        solana_streamer::quic_socket::into_quic_socket,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
         std::sync::atomic::{AtomicU64, Ordering},
     };
@@ -851,8 +852,14 @@ pub mod tests {
         let bank_forks_controller = Arc::new(bank_forks_controller);
         let (reward_vote_aggregates_sender, _reward_vote_aggregates_receiver) = bounded(1024);
 
-        let votor_client_socket =
-            QuicSocket::Kernel(bind_to_localhost_unique().expect("bind votor client socket"));
+        let votor_server_sockets = vec![into_quic_socket(
+            bind_to_localhost_unique().expect("bind votor server socket"),
+            None,
+        )];
+        let votor_client_socket = into_quic_socket(
+            bind_to_localhost_unique().expect("bind votor client socket"),
+            None,
+        );
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
             Arc::new(RwLock::new(vec![Arc::new(vote_keypair)])),
@@ -918,9 +925,7 @@ pub mod tests {
                 cancel: CancellationToken::new(),
                 validator_exit: Arc::default(),
                 key_notifiers,
-                votor_server_sockets: vec![
-                    bind_to_localhost_unique().expect("bind votor server socket"),
-                ],
+                votor_server_sockets,
                 votor_client_socket,
                 votor_peer_overrides: Arc::default(),
                 highest_finalized: Arc::new(RwLock::new(None)),

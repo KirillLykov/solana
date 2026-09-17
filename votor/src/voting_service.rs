@@ -395,7 +395,7 @@ mod tests {
             },
         },
         solana_signer::Signer,
-        solana_streamer::quic_socket::QuicSocket,
+        solana_streamer::quic_socket::{QuicSocket, into_quic_socket},
         std::{
             collections::HashMap,
             net::SocketAddr,
@@ -570,7 +570,7 @@ mod tests {
         let (egress, endpoint) = QuicDatagramEndpoint::spawn(
             rt.handle(),
             &keypair,
-            vec![socket],
+            vec![into_quic_socket(socket, None)],
             client_socket,
             ingress_sender,
             peer_list_receiver,
