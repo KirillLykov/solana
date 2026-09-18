@@ -1976,6 +1976,10 @@ impl Validator {
             "local alpenglow votor server address: {}",
             node.sockets.votor_server[0].local_addr().unwrap()
         );
+        info!(
+            "local alpenglow votor client address: {}",
+            node.sockets.quic_votor_client.local_addr().unwrap()
+        );
     }
 
     pub fn join(self) {
