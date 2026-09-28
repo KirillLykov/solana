@@ -3,6 +3,8 @@ use {
     crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded},
 };
 
+//TODO(klykov): Why not just ArrayQueue?
+
 /// A sender implementation that evicts the oldest message when the channel is full.
 pub struct EvictingSender<T> {
     sender: Sender<T>,
