@@ -46,6 +46,23 @@ pub trait ChannelSend<T>: Send + 'static {
     fn len(&self) -> usize;
 }
 
+impl<T, S: ChannelSend<T> + ?Sized> ChannelSend<T> for Box<S> {
+    #[inline]
+    fn try_send(&self, msg: T) -> std::result::Result<(), TrySendError<T>> {
+        (**self).try_send(msg)
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        (**self).is_empty()
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+}
+
 impl<T> ChannelSend<T> for Sender<T>
 where
     T: Send + 'static,

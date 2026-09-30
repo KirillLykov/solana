@@ -401,8 +401,18 @@ impl Tvu {
 
         let (verified_sender, verified_receiver) = unbounded();
 
-        let (retransmit_sender, retransmit_receiver) =
-            EvictingSender::new_bounded(CHANNEL_SIZE_RETRANSMIT_INGRESS);
+        let (retransmit_sender, retransmit_stage) = RetransmitStage::new(
+            bank_forks.clone(),
+            leader_schedule_cache.clone(),
+            cluster_info.clone(),
+            Arc::new(retransmit_sockets),
+            CHANNEL_SIZE_RETRANSMIT_INGRESS,
+            max_slots.clone(),
+            rpc_subscriptions.clone(),
+            slot_status_notifier.clone(),
+            tvu_config.turbine_xdp_sender,
+            votor_event_sender.clone(),
+        );
 
         let shred_sigverify = solana_turbine::sigverify_shreds::spawn_shred_sigverify(
             cluster_info.clone(),
@@ -421,19 +431,6 @@ impl Tvu {
                 }
             }),
             tvu_config.shred_sigverify_threads,
-        );
-
-        let retransmit_stage = RetransmitStage::new(
-            bank_forks.clone(),
-            leader_schedule_cache.clone(),
-            cluster_info.clone(),
-            Arc::new(retransmit_sockets),
-            retransmit_receiver,
-            max_slots.clone(),
-            rpc_subscriptions.clone(),
-            slot_status_notifier.clone(),
-            tvu_config.turbine_xdp_sender,
-            votor_event_sender.clone(),
         );
 
         let (ancestor_duplicate_slots_sender, ancestor_duplicate_slots_receiver) = unbounded();

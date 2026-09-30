@@ -6,11 +6,11 @@ use {
         cluster_nodes::{
             ClusterNodes, ClusterNodesCache, DATA_PLANE_FANOUT, Error, MAX_NUM_TURBINE_HOPS,
         },
-        retransmit_stage::worker_pool::{PoolSender, WorkerJob, WorkerPool},
+        retransmit_stage::worker_pool::{PoolReceiver, PoolSender, WorkerPool},
     },
     agave_votor::event::VotorEvent,
     agave_votor_messages::migration::MigrationStatus,
-    crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError},
+    crossbeam_channel::{Receiver, Sender, TrySendError},
     lru::LruCache,
     rand::Rng,
     solana_address::Address,
@@ -22,7 +22,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_net_utils::SocketAddrSpace,
-    solana_perf::deduper::Deduper,
+    solana_perf::{deduper::Deduper, packet::PACKETS_PER_BATCH},
     solana_rpc::{
         max_slots::MaxSlots, rpc_subscriptions::RpcSubscriptions,
         slot_status_notifier::SlotStatusNotifier,
@@ -32,12 +32,16 @@ use {
         bank::{Bank, MAX_LEADER_SCHEDULE_STAKES},
         bank_forks::BankForks,
     },
-    solana_streamer::sendmmsg::{SendPktsError, multi_target_send},
+    solana_streamer::{
+        evicting_sender::EvictingSender,
+        sendmmsg::{SendPktsError, multi_target_send},
+        streamer::ChannelSend,
+    },
     solana_time_utils::timestamp,
     std::{
         collections::{HashMap, HashSet},
         net::{SocketAddr, UdpSocket},
-        ops::{AddAssign, Range},
+        ops::AddAssign,
         sync::{
             Arc, RwLock,
             atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -53,10 +57,6 @@ const MAX_DUPLICATE_COUNT: usize = 2;
 const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_NUM_BITS: u64 = 637_534_199; // 76MB
 const DEDUPER_RESET_CYCLE: Duration = Duration::from_secs(5 * 60);
-// Minimum number of shreds to distribute across retransmit workers.
-const PAR_ITER_MIN_NUM_SHREDS: usize = 2;
-const MAX_SHREDS_PER_RETRANSMIT_JOB: usize = 64;
-
 const _: () = const {
     // From https://github.com/anza-xyz/agave/pull/1735#discussion_r1644899183:
     // 1. There must be at least two epochs because near an epoch boundary you might receive
@@ -115,8 +115,6 @@ struct RetransmitStats {
 
 struct RetransmitState {
     stats: RetransmitStats,
-    shred_buf: Vec<Vec<shred::Payload>>,
-    shreds: Arc<Vec<shred::Payload>>,
     pending_first_shred_event: Option<VotorEvent>,
 }
 
@@ -127,17 +125,24 @@ struct RetransmitNotifiers {
     votor_event_sender: Sender<VotorEvent>,
 }
 
-struct RetransmitContext {
-    retransmit_sender: RetransmitSender,
+struct WorkerContext {
     bank_forks: Arc<RwLock<BankForks>>,
     leader_schedule_cache: Arc<LeaderScheduleCache>,
     cluster_info: Arc<ClusterInfo>,
-    retransmit_receiver: Receiver<Vec<shred::Payload>>,
     retransmit_sockets: Arc<Vec<UdpSocket>>,
     xdp_sender: Option<XdpSender>,
-    cluster_nodes_cache: ClusterNodesCache<RetransmitStage>,
+    cluster_nodes_cache: Arc<ClusterNodesCache<RetransmitStage>>,
     shred_deduper: Arc<ShredDeduper>,
     max_slots: Arc<MaxSlots>,
+    result_sender: Sender<JobStats>,
+}
+
+struct AggregatorContext {
+    bank_forks: Arc<RwLock<BankForks>>,
+    cluster_info: Arc<ClusterInfo>,
+    cluster_nodes_cache: Arc<ClusterNodesCache<RetransmitStage>>,
+    shred_deduper: Arc<ShredDeduper>,
+    is_xdp: bool,
     notifiers: RetransmitNotifiers,
 }
 
@@ -145,8 +150,6 @@ impl RetransmitState {
     fn new(now: Instant) -> Self {
         Self {
             stats: RetransmitStats::new(now),
-            shred_buf: Vec::with_capacity(RETRANSMIT_BATCH_SIZE),
-            shreds: Arc::new(Vec::with_capacity(RETRANSMIT_BATCH_SIZE)),
             pending_first_shred_event: None,
         }
     }
@@ -155,8 +158,7 @@ impl RetransmitState {
 impl RetransmitStats {
     fn maybe_submit(
         &mut self,
-        root_bank: &Bank,
-        working_bank: &Bank,
+        bank_forks: &RwLock<BankForks>,
         cluster_info: &ClusterInfo,
         cluster_nodes_cache: &ClusterNodesCache<RetransmitStage>,
         is_xdp: bool,
@@ -165,8 +167,12 @@ impl RetransmitStats {
         if self.since.elapsed() < SUBMIT_CADENCE {
             return;
         }
+        let (working_bank, root_bank) = {
+            let bank_forks = bank_forks.read().unwrap();
+            (bank_forks.working_bank(), bank_forks.root_bank())
+        };
         cluster_nodes_cache
-            .get(root_bank.slot(), root_bank, working_bank, cluster_info)
+            .get(root_bank.slot(), &root_bank, &working_bank, cluster_info)
             .submit_metrics("cluster_nodes_retransmit", timestamp());
         datapoint_info!(
             "retransmit-stage",
@@ -250,26 +256,16 @@ impl<const K: usize> ShredDeduper<K> {
 
 type RetransmitAddrCache = HashMap<Slot, (Address, Arc<ClusterNodes<RetransmitStage>>)>;
 
-struct RetransmitJob {
-    context: JobContext,
-    range: Range<usize>,
-}
-
-#[derive(Clone)]
-struct JobContext {
-    shreds: Arc<Vec<shred::Payload>>,
-    retransmit_sockets: Arc<Vec<UdpSocket>>,
-    xdp_sender: Option<XdpSender>,
-    cluster_info: Arc<ClusterInfo>,
-    shred_deduper: Arc<ShredDeduper>,
-    root_bank: Arc<Bank>,
-    cache: Arc<RetransmitAddrCache>,
-    result_sender: Sender<JobStats>,
-}
-
 #[derive(Default)]
 struct JobStats {
+    root: Slot,
     slot_stats: Vec<(Slot, RetransmitSlotStats)>,
+    num_shreds: usize,
+    num_small_batches: usize,
+    total_batches: usize,
+    total_time: u64,
+    epoch_fetch: u64,
+    unknown_shred_slot_leader: usize,
     num_nodes: usize,
     num_addrs_failed: usize,
     num_shreds_dropped_xdp_full: usize,
@@ -294,47 +290,61 @@ impl JobStats {
     }
 }
 
-impl WorkerJob for RetransmitJob {
-    fn run(self, worker_index: usize) {
-        let RetransmitJob { context, range } = self;
-        let mut stats = JobStats::default();
-        let socket_addr_space = context.cluster_info.socket_addr_space();
-        for shred in context.shreds[range].iter() {
-            let socket = RetransmitSocket::new(
-                worker_index,
-                &context.retransmit_sockets,
-                context.xdp_sender.as_ref(),
-                &context.cluster_info,
-            );
-            let shred_stats = retransmit_shred(
-                shred.clone(),
-                &context.root_bank,
-                &context.shred_deduper,
-                &context.cache,
-                socket_addr_space,
-                socket,
-                &mut stats,
-            );
-            if let Some(shred_stats) = shred_stats {
-                stats.record_slot_stats(shred_stats);
-            }
-        }
-        // If receiver has been dropped, retransmission has already completed and only these per-job
-        // stats are lost. The worker has no recovery to perform.
-        let _ = context.result_sender.send(stats);
-    }
-}
-
 struct RetransmitWorkerPool {
     inner: WorkerPool,
 }
 
-type RetransmitSender = PoolSender<RetransmitJob>;
+type InnerRetransmitSender = EvictingSender<
+    Vec<shred::Payload>,
+    PoolSender<Vec<shred::Payload>>,
+    PoolReceiver<Vec<shred::Payload>>,
+>;
+
+pub struct RetransmitSender(InnerRetransmitSender);
+
+impl Clone for RetransmitSender {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl ChannelSend<Vec<shred::Payload>> for RetransmitSender {
+    fn try_send(
+        &self,
+        shreds: Vec<shred::Payload>,
+    ) -> Result<(), TrySendError<Vec<shred::Payload>>> {
+        assert!(
+            shreds.len() <= PACKETS_PER_BATCH,
+            "retransmit batch exceeds {PACKETS_PER_BATCH} shreds"
+        );
+        self.0.try_send(shreds)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
 
 impl RetransmitWorkerPool {
-    fn build(num_workers: usize) -> (RetransmitSender, Self) {
-        let (sender, inner) = WorkerPool::build("solRetransmit", num_workers, num_workers);
-        (sender, Self { inner })
+    fn build(
+        num_workers: usize,
+        queue_capacity: usize,
+        context: Arc<WorkerContext>,
+    ) -> (RetransmitSender, Self) {
+        let (sender, receiver, inner) = WorkerPool::build(
+            "solRetransmit",
+            num_workers,
+            queue_capacity,
+            move |shreds, worker_index| retransmit_batch(&context, shreds, worker_index),
+        );
+        (
+            RetransmitSender(EvictingSender::new(sender, receiver)),
+            Self { inner },
+        )
     }
 
     fn join(self) -> thread::Result<()> {
@@ -399,172 +409,116 @@ impl<'a> RetransmitSocket<'a> {
     }
 }
 
-/// The number of shreds to pull from the retransmit_receiver at a time.
-const RETRANSMIT_BATCH_SIZE: usize = 4096;
-
-// pull the shreds from the shreds_receiver until empty, then retransmit them.
-// uses a thread_pool to parallelize work if there are enough shreds to justify that
-fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Result<(), ()> {
-    let retransmit_sender = &context.retransmit_sender;
-    let bank_forks = context.bank_forks.as_ref();
-    let leader_schedule_cache = context.leader_schedule_cache.as_ref();
-    let cluster_info = context.cluster_info.clone();
-    let retransmit_receiver = &context.retransmit_receiver;
-    let retransmit_sockets = context.retransmit_sockets.clone();
-    let xdp_sender = context.xdp_sender.clone();
-    let cluster_nodes_cache = &context.cluster_nodes_cache;
-    let shred_deduper = &context.shred_deduper;
-    let max_slots = context.max_slots.as_ref();
-    let RetransmitState {
-        stats,
-        shred_buf,
-        shreds,
-        pending_first_shred_event,
-    } = state;
-
-    // Attempt to resend a pending first shred event to votor
-    if let Some(event) = pending_first_shred_event.take()
-        && let Err(TrySendError::Full(event)) = context.notifiers.votor_event_sender.try_send(event)
-    {
-        // Failed again, requeue
-        *pending_first_shred_event = Some(event);
-    }
-
-    // Try to receive shreds from the channel without blocking. If the channel
-    // is empty, block until some shreds are received.
-    match retransmit_receiver.try_recv() {
-        Ok(shreds) => {
-            shred_buf.push(shreds);
-        }
-        Err(TryRecvError::Disconnected) => return Err(()),
-        Err(TryRecvError::Empty) => {
-            shred_buf.push(retransmit_receiver.recv().map_err(|_| ())?);
-        }
+fn retransmit_batch(context: &WorkerContext, shreds: Vec<shred::Payload>, worker_index: usize) {
+    debug_assert!(shreds.len() <= PACKETS_PER_BATCH);
+    let mut timer = Measure::start("retransmit");
+    let mut stats = JobStats {
+        num_shreds: shreds.len(),
+        num_small_batches: usize::from(shreds.len() < 2),
+        total_batches: 1,
+        ..JobStats::default()
     };
-    // now the batch has started
-    let mut timer_start = Measure::start("retransmit");
-    let mut num_shreds = shred_buf[0].len();
-    // Create a RETRANSMIT_BATCH_SIZE sized batch from the channel
-    for shreds in retransmit_receiver
-        .try_iter()
-        // We already pulled 1 batch
-        .take(RETRANSMIT_BATCH_SIZE - 1)
-    {
-        num_shreds += shreds.len();
-        shred_buf.push(shreds);
-    }
-
-    stats.num_shreds += num_shreds;
-    stats.total_batches += 1;
 
     let mut epoch_fetch = Measure::start("retransmit_epoch_fetch");
     let (working_bank, root_bank) = {
-        let bank_forks = bank_forks.read().unwrap();
+        let bank_forks = context.bank_forks.read().unwrap();
         (bank_forks.working_bank(), bank_forks.root_bank())
     };
     epoch_fetch.stop();
-    stats.epoch_fetch += epoch_fetch.as_us();
+    stats.epoch_fetch = epoch_fetch.as_us();
+    stats.root = root_bank.slot();
 
-    let mut epoch_cache_update = Measure::start("retransmit_epoch_cache_update");
-    shred_deduper.maybe_reset(
-        &mut rand::rng(),
-        DEDUPER_FALSE_POSITIVE_RATE,
-        DEDUPER_RESET_CYCLE,
-    );
-    epoch_cache_update.stop();
-    stats.epoch_cache_update += epoch_cache_update.as_us();
-    // Lookup slot leader and cluster nodes for each slot.
-    {
-        let shreds = Arc::get_mut(shreds).expect("retransmit shreds still shared by worker jobs");
-        shreds.clear();
-        shreds.extend(shred_buf.drain(..).flatten());
-    }
+    // Resolve the leader and retransmit tree once for each distinct slot in this capped batch.
     let cache: RetransmitAddrCache = shreds
         .iter()
         .filter_map(|shred| shred::layout::get_slot(shred))
         .collect::<HashSet<Slot>>()
         .into_iter()
-        .filter_map(|slot: Slot| {
-            max_slots.retransmit.fetch_max(slot, Ordering::Relaxed);
-            // TODO: consider using root-bank here for leader lookup!
-            // Shreds' signatures should be verified before they reach here,
-            // and if the leader is unknown they should fail signature check.
-            // So here we should expect to know the slot leader and otherwise
-            // skip the shred.
-            let Some(slot_leader) = leader_schedule_cache.slot_leader_at(slot, Some(&working_bank))
+        .filter_map(|slot| {
+            context
+                .max_slots
+                .retransmit
+                .fetch_max(slot, Ordering::Relaxed);
+            // Shreds have already passed signature verification, so the leader should be known.
+            let Some(slot_leader) = context
+                .leader_schedule_cache
+                .slot_leader_at(slot, Some(&working_bank))
             else {
-                stats.unknown_shred_slot_leader += num_shreds;
+                stats.unknown_shred_slot_leader += shreds
+                    .iter()
+                    .filter(|shred| shred::layout::get_slot(shred) == Some(slot))
+                    .count();
                 return None;
             };
-            let cluster_nodes =
-                cluster_nodes_cache.get(slot, &root_bank, &working_bank, &cluster_info);
+            let cluster_nodes = context.cluster_nodes_cache.get(
+                slot,
+                &root_bank,
+                &working_bank,
+                &context.cluster_info,
+            );
             Some((slot, (slot_leader.id, cluster_nodes)))
         })
         .collect();
-    let cache = Arc::new(cache);
 
-    let num_workers = retransmit_sockets.len();
-    let job_count = if num_shreds < PAR_ITER_MIN_NUM_SHREDS {
-        stats.num_small_batches += 1;
-        1
-    } else {
-        let jobs_for_parallelism = num_workers.min(num_shreds);
-        let jobs_for_size_limit = num_shreds.div_ceil(MAX_SHREDS_PER_RETRANSMIT_JOB);
-        jobs_for_parallelism.max(jobs_for_size_limit)
-    };
-
-    let (result_sender, result_receiver) = crossbeam_channel::bounded(job_count);
-
-    let batch_size = num_shreds / job_count;
-    let remainder = num_shreds % job_count;
-
-    let mut start = 0;
-    let is_xdp = xdp_sender.is_some();
-    let job_context = JobContext {
-        shreds: shreds.clone(),
-        retransmit_sockets,
-        xdp_sender,
-        cluster_info: cluster_info.clone(),
-
-        root_bank: root_bank.clone(),
-        shred_deduper: shred_deduper.clone(),
-        cache: cache.clone(),
-        result_sender,
-    };
-    for worker_index in 0..job_count {
-        let len = batch_size + usize::from(worker_index < remainder);
-        let end = start + len;
-
-        let job = RetransmitJob {
-            context: job_context.clone(),
-            range: start..end,
-        };
-        retransmit_sender.send(job);
-
-        start = end;
+    let socket_addr_space = context.cluster_info.socket_addr_space();
+    for shred in shreds {
+        let socket = RetransmitSocket::new(
+            worker_index,
+            &context.retransmit_sockets,
+            context.xdp_sender.as_ref(),
+            &context.cluster_info,
+        );
+        if let Some(shred_stats) = retransmit_shred(
+            shred,
+            &root_bank,
+            &context.shred_deduper,
+            &cache,
+            socket_addr_space,
+            socket,
+            &mut stats,
+        ) {
+            stats.record_slot_stats(shred_stats);
+        }
     }
+    timer.stop();
+    stats.total_time = timer.as_us();
+    // A disconnected result channel means the stage is already shutting down.
+    let _ = context.result_sender.send(stats);
+}
 
-    drop(job_context);
+fn aggregate_results(context: AggregatorContext, result_receiver: Receiver<JobStats>) {
+    let mut state = RetransmitState::new(Instant::now());
+    for job_stats in result_receiver {
+        if let Some(event) = state.pending_first_shred_event.take()
+            && let Err(TrySendError::Full(event)) =
+                context.notifiers.votor_event_sender.try_send(event)
+        {
+            state.pending_first_shred_event = Some(event);
+        }
 
-    for job_stats in result_receiver.iter() {
-        stats.upsert_job_stats(
+        let mut epoch_cache_update = Measure::start("retransmit_epoch_cache_update");
+        context.shred_deduper.maybe_reset(
+            &mut rand::rng(),
+            DEDUPER_FALSE_POSITIVE_RATE,
+            DEDUPER_RESET_CYCLE,
+        );
+        epoch_cache_update.stop();
+        state.stats.epoch_cache_update += epoch_cache_update.as_us();
+
+        let root = job_stats.root;
+        state.stats.upsert_job_stats(
             job_stats,
-            root_bank.slot(),
+            root,
             &context.notifiers,
-            pending_first_shred_event,
+            &mut state.pending_first_shred_event,
+        );
+        state.stats.maybe_submit(
+            &context.bank_forks,
+            &context.cluster_info,
+            &context.cluster_nodes_cache,
+            context.is_xdp,
         );
     }
-
-    timer_start.stop();
-    stats.total_time += timer_start.as_us();
-    stats.maybe_submit(
-        &root_bank,
-        &working_bank,
-        cluster_info.as_ref(),
-        cluster_nodes_cache,
-        is_xdp,
-    );
-    Ok(())
 }
 
 // Retransmit a single shred to all downstream nodes
@@ -651,8 +605,8 @@ fn get_retransmit_addrs(
 
 /// Service to retransmit messages received from other peers in turbine.
 pub struct RetransmitStage {
-    retransmit_thread_handle: JoinHandle<()>,
     thread_pool: RetransmitWorkerPool,
+    result_aggregator: JoinHandle<()>,
 }
 
 impl RetransmitStage {
@@ -664,43 +618,54 @@ impl RetransmitStage {
     /// * `bank_forks` - Reference to the BankForks structure
     /// * `leader_schedule_cache` - The leader schedule to verify shreds
     /// * `cluster_info` - This structure needs to be updated and populated by the bank and via gossip.
-    /// * `retransmit_receiver` - Receive channel for batches of shreds to be retransmitted.
+    ///
+    /// Returns the sender through which producers submit capped batches directly to workers.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         bank_forks: Arc<RwLock<BankForks>>,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
         cluster_info: Arc<ClusterInfo>,
         retransmit_sockets: Arc<Vec<UdpSocket>>,
-        retransmit_receiver: Receiver<Vec<shred::Payload>>,
+        queue_capacity: usize,
         max_slots: Arc<MaxSlots>,
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         slot_status_notifier: Option<SlotStatusNotifier>,
         xdp_sender: Option<XdpSender>,
         votor_event_sender: Sender<VotorEvent>,
-    ) -> Self {
+    ) -> (RetransmitSender, Self) {
         let migration_status = bank_forks.read().unwrap().migration_status();
-        let cluster_nodes_cache = ClusterNodesCache::<RetransmitStage>::new(
+        let cluster_nodes_cache = Arc::new(ClusterNodesCache::<RetransmitStage>::new(
             CLUSTER_NODES_CACHE_NUM_EPOCH_CAP,
             CLUSTER_NODES_CACHE_TTL,
-        );
+        ));
         let mut rng = rand::rng();
         let shred_deduper = Arc::new(ShredDeduper::new(&mut rng, DEDUPER_NUM_BITS));
+        let (result_sender, result_receiver) = crossbeam_channel::unbounded();
 
         // Match workers to retransmit sockets to preserve socket affinity.
-        let (retransmit_sender, thread_pool) =
-            RetransmitWorkerPool::build(retransmit_sockets.len());
-
-        let retransmit_context = RetransmitContext {
-            retransmit_sender,
-            bank_forks,
+        let worker_context = Arc::new(WorkerContext {
+            bank_forks: Arc::clone(&bank_forks),
             leader_schedule_cache,
-            cluster_info,
-            retransmit_receiver,
+            cluster_info: Arc::clone(&cluster_info),
             retransmit_sockets,
-            xdp_sender,
+            xdp_sender: xdp_sender.clone(),
+            cluster_nodes_cache: Arc::clone(&cluster_nodes_cache),
+            shred_deduper: Arc::clone(&shred_deduper),
+            max_slots,
+            result_sender,
+        });
+        let (retransmit_sender, thread_pool) = RetransmitWorkerPool::build(
+            worker_context.retransmit_sockets.len(),
+            queue_capacity,
+            worker_context,
+        );
+
+        let aggregator_context = AggregatorContext {
+            bank_forks,
+            cluster_info,
             cluster_nodes_cache,
             shred_deduper,
-            max_slots,
+            is_xdp: xdp_sender.is_some(),
             notifiers: RetransmitNotifiers {
                 rpc_subscriptions,
                 slot_status_notifier,
@@ -709,33 +674,31 @@ impl RetransmitStage {
             },
         };
 
-        let retransmit_thread_handle = Builder::new()
+        let result_aggregator = Builder::new()
             .name("solRetransmittr".to_string())
-            .spawn({
-                move || {
-                    let mut retransmit_state = RetransmitState::new(Instant::now());
-                    while retransmit(&retransmit_context, &mut retransmit_state).is_ok() {}
-                }
-            })
+            .spawn(move || aggregate_results(aggregator_context, result_receiver))
             .unwrap();
 
-        Self {
-            retransmit_thread_handle,
-            thread_pool,
-        }
+        (
+            retransmit_sender,
+            Self {
+                thread_pool,
+                result_aggregator,
+            },
+        )
     }
 
     pub fn join(self) -> thread::Result<()> {
         let Self {
-            retransmit_thread_handle,
             thread_pool,
+            result_aggregator,
         } = self;
 
-        let retransmit_result = retransmit_thread_handle.join();
         let worker_pool_result = thread_pool.join();
+        let aggregator_result = result_aggregator.join();
 
-        retransmit_result?;
-        worker_pool_result
+        worker_pool_result?;
+        aggregator_result
     }
 }
 
@@ -843,7 +806,13 @@ impl RetransmitStats {
         }
     }
 
-    fn accumulate_job_stats(&self, job_stats: &JobStats) {
+    fn accumulate_job_stats(&mut self, job_stats: &JobStats) {
+        self.num_shreds += job_stats.num_shreds;
+        self.num_small_batches += job_stats.num_small_batches;
+        self.total_batches += job_stats.total_batches;
+        self.total_time += job_stats.total_time;
+        self.epoch_fetch += job_stats.epoch_fetch;
+        self.unknown_shred_slot_leader += job_stats.unknown_shred_slot_leader;
         self.num_nodes
             .fetch_add(job_stats.num_nodes, Ordering::Relaxed);
         self.num_addrs_failed
@@ -958,6 +927,7 @@ fn notify_subscribers(
 mod tests {
     use {
         super::*,
+        crossbeam_channel::TryRecvError,
         rand::SeedableRng,
         rand_chacha::ChaChaRng,
         solana_entry::entry::create_ticks,

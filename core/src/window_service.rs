@@ -30,7 +30,7 @@ use {
     solana_net_utils::PinnedXdpSender,
     solana_rayon_threadlimit::get_thread_count,
     solana_runtime::bank_forks::{BankForks, SharableBanks},
-    solana_streamer::evicting_sender::EvictingSender,
+    solana_streamer::streamer::ChannelSend,
     std::{
         borrow::Cow,
         net::UdpSocket,
@@ -230,7 +230,7 @@ where
 
 pub struct WindowServiceChannels {
     pub verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
-    pub retransmit_sender: EvictingSender<Vec<shred::Payload>>,
+    pub retransmit_sender: Box<dyn ChannelSend<Vec<shred::Payload>>>,
     pub completed_data_sets_sender: Option<CompletedDataSetsSender>,
     pub duplicate_slots_sender: DuplicateSlotSender,
     pub repair_service_channels: RepairServiceChannels,
@@ -240,7 +240,7 @@ pub struct WindowServiceChannels {
 impl WindowServiceChannels {
     pub fn new(
         verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
-        retransmit_sender: EvictingSender<Vec<shred::Payload>>,
+        retransmit_sender: impl ChannelSend<Vec<shred::Payload>>,
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
         duplicate_slots_sender: DuplicateSlotSender,
         repair_service_channels: RepairServiceChannels,
@@ -248,7 +248,7 @@ impl WindowServiceChannels {
     ) -> Self {
         Self {
             verified_receiver,
-            retransmit_sender,
+            retransmit_sender: Box::new(retransmit_sender),
             completed_data_sets_sender,
             duplicate_slots_sender,
             repair_service_channels,
@@ -377,7 +377,7 @@ impl WindowService {
         verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
         check_duplicate_sender: Sender<PossibleDuplicateShred>,
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
-        retransmit_sender: EvictingSender<Vec<shred::Payload>>,
+        retransmit_sender: Box<dyn ChannelSend<Vec<shred::Payload>>>,
     ) -> JoinHandle<()> {
         let reed_solomon_cache = ReedSolomonCache::default();
         Builder::new()
@@ -622,7 +622,8 @@ mod test {
             let shreds = [&original_shred, &duplicate_shred]
                 .into_iter()
                 .map(|shred| (Cow::Borrowed(shred), /*is_repaired:*/ false));
-            let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
+            let (dummy_retransmit_sender, _) =
+                solana_streamer::evicting_sender::EvictingSender::new_bounded(0);
             blockstore
                 .insert_shreds_handle_duplicate(
                     shreds,

@@ -10,10 +10,10 @@ use {
     agave_feature_set as feature_set,
     solana_clock::Slot,
     solana_epoch_schedule::EpochSchedule,
-    solana_perf::packet::PacketRef,
+    solana_perf::packet::{PACKETS_PER_BATCH, PacketRef},
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
-    solana_streamer::{evicting_sender::EvictingSender, streamer::ChannelSend},
+    solana_streamer::streamer::ChannelSend,
     std::{
         sync::{
             Arc,
@@ -506,7 +506,7 @@ pub struct ShredRecoveryContext {
     /// Used to perform RS erasure code recovery
     pub reed_solomon_cache: ReedSolomonCache,
     /// Sender to retransmit the recovered shreds
-    retransmit_sender: EvictingSender<Vec<Payload>>,
+    retransmit_sender: Box<dyn ChannelSend<Vec<Payload>>>,
     /// Used for filtering recovered shreds
     shred_filter_ctx: ShredFilterContext,
 }
@@ -514,14 +514,14 @@ pub struct ShredRecoveryContext {
 impl ShredRecoveryContext {
     pub fn new(
         reed_solomon_cache: ReedSolomonCache,
-        retransmit_sender: EvictingSender<Vec<Payload>>,
+        retransmit_sender: impl ChannelSend<Vec<Payload>>,
         root_bank: Arc<Bank>,
         shred_version: u16,
     ) -> Self {
         let shred_filter_ctx = ShredFilterContext::new(root_bank, shred_version);
         Self {
             reed_solomon_cache,
-            retransmit_sender,
+            retransmit_sender: Box::new(retransmit_sender),
             shred_filter_ctx,
         }
     }
@@ -582,14 +582,26 @@ impl ShredRecoveryContext {
     }
     /// Send recovered shreds for retransmit
     pub fn try_retransmit_shreds(&self, recovered_shreds: Vec<Payload>) {
-        if !recovered_shreds.is_empty() {
-            let _ = self.retransmit_sender.try_send(recovered_shreds);
-        }
+        send_retransmit_batches(self.retransmit_sender.as_ref(), recovered_shreds);
     }
 
     /// Apply filtering rules to recovered shreds.
     pub fn should_discard_shred(&mut self, shred: &Shred) -> bool {
         self.shred_filter_ctx.should_discard_shred(shred.payload())
+    }
+}
+
+fn send_retransmit_batches(
+    retransmit_sender: &dyn ChannelSend<Vec<Payload>>,
+    recovered_shreds: Vec<Payload>,
+) {
+    let mut recovered_shreds = recovered_shreds.into_iter();
+    loop {
+        let batch: Vec<_> = recovered_shreds.by_ref().take(PACKETS_PER_BATCH).collect();
+        if batch.is_empty() {
+            break;
+        }
+        let _ = retransmit_sender.try_send(batch);
     }
 }
 
@@ -632,6 +644,19 @@ mod tests {
         } else {
             Bank::new_from_parent_with_bank_forks(&bank_forks, bank, SlotLeader::default(), slot)
         }
+    }
+
+    #[test]
+    fn test_send_retransmit_batches_caps_batch_size() {
+        let (sender, receiver) = crossbeam_channel::bounded(3);
+        let shreds = (0..PACKETS_PER_BATCH * 2 + 1)
+            .map(|_| Payload::from(vec![0u8]))
+            .collect();
+
+        send_retransmit_batches(&sender, shreds);
+
+        let batch_sizes = receiver.try_iter().map(|batch| batch.len()).collect_vec();
+        assert_eq!(batch_sizes, [PACKETS_PER_BATCH, PACKETS_PER_BATCH, 1]);
     }
 
     fn deactivate_slot_time_features(bank: &mut Bank) {
@@ -853,7 +878,8 @@ mod tests {
         // Feed recovery only coding shreds. Without the custom limit below, this
         // is enough parity to recover the missing data shreds.
         let max_code_shreds_per_slot = coding_shreds[0].index();
-        let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
+        let (dummy_retransmit_sender, _) =
+            solana_streamer::evicting_sender::EvictingSender::new_bounded(0);
         let mut shred_recovery_context = ShredRecoveryContext::new(
             ReedSolomonCache::default(),
             dummy_retransmit_sender,

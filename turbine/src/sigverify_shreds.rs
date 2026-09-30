@@ -1,7 +1,7 @@
 use {
     crate::{
         cluster_nodes::{ClusterNodesCache, DATA_PLANE_FANOUT},
-        retransmit_stage::RetransmitStage,
+        retransmit_stage::{RetransmitSender, RetransmitStage},
     },
     agave_feature_set as feature_set,
     crossbeam_channel::{Receiver, RecvTimeoutError, SendError, Sender},
@@ -23,12 +23,12 @@ use {
     solana_perf::{
         self,
         deduper::Deduper,
-        packet::{PacketBatch, PacketRef, PacketRefMut},
+        packet::{PACKETS_PER_BATCH, PacketBatch, PacketRef, PacketRefMut},
     },
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::BankForks},
     solana_signer::Signer,
-    solana_streamer::{evicting_sender::EvictingSender, streamer::ChannelSend},
+    solana_streamer::streamer::ChannelSend,
     std::{
         num::NonZeroUsize,
         sync::{
@@ -81,7 +81,7 @@ pub fn spawn_shred_sigverify(
     bank_forks: Arc<RwLock<BankForks>>,
     leader_schedule_cache: Arc<LeaderScheduleCache>,
     shred_fetch_receiver: Receiver<PacketBatch>,
-    retransmit_sender: EvictingSender<Vec<shred::Payload>>,
+    retransmit_sender: RetransmitSender,
     verified_sender: Sender<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
     repair_nonce_location_lookup: Arc<RepairNonceLocationLookup>,
     num_sigverify_threads: NonZeroUsize,
@@ -147,7 +147,7 @@ fn run_shred_sigverify<const K: usize>(
     leader_schedule_cache: &LeaderScheduleCache,
     deduper: &Deduper<K, [u8]>,
     shred_fetch_receiver: &Receiver<PacketBatch>,
-    retransmit_sender: &EvictingSender<Vec<shred::Payload>>,
+    retransmit_sender: &RetransmitSender,
     verified_sender: &Sender<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
     cluster_nodes_cache: &ClusterNodesCache<RetransmitStage>,
     repair_nonce_location_lookup: &RepairNonceLocationLookup,
@@ -264,14 +264,8 @@ fn run_shred_sigverify<const K: usize>(
 
     // Repaired shreds are not retransmitted.
     stats.num_retransmit_shreds += shreds.len();
-    if let Err(send_err) = retransmit_sender.try_send(shreds.clone()) {
-        match send_err {
-            crossbeam_channel::TrySendError::Full(v) => {
-                stats.num_retransmit_stage_overflow_shreds += v.len();
-            }
-            _ => unreachable!("EvictingSender holds on to both ends of the channel"),
-        }
-    }
+    stats.num_retransmit_stage_overflow_shreds +=
+        send_retransmit_batches(retransmit_sender, &shreds)?;
     // Send all shreds to window service to be inserted into blockstore.
     let shreds = shreds
         .into_iter()
@@ -280,6 +274,26 @@ fn run_shred_sigverify<const K: usize>(
     stats.elapsed_micros += now.elapsed().as_micros() as u64;
     shred_buffer.clear();
     Ok(())
+}
+
+fn send_retransmit_batches(
+    retransmit_sender: &impl ChannelSend<Vec<shred::Payload>>,
+    shreds: &[shred::Payload],
+) -> Result<usize, ShredSigverifyError> {
+    let mut num_overflow_shreds = 0;
+    for shreds in shreds.chunks(PACKETS_PER_BATCH) {
+        if let Err(send_err) = retransmit_sender.try_send(shreds.to_vec()) {
+            match send_err {
+                crossbeam_channel::TrySendError::Full(v) => {
+                    num_overflow_shreds += v.len();
+                }
+                crossbeam_channel::TrySendError::Disconnected(_) => {
+                    return Err(ShredSigverifyError::SendError);
+                }
+            }
+        }
+    }
+    Ok(num_overflow_shreds)
 }
 
 /// Extracts shred bytes and, for repaired shreds, the location where the shred
@@ -609,6 +623,22 @@ mod tests {
         solana_time_utils::timestamp,
         test_case::test_matrix,
     };
+
+    #[test]
+    fn test_send_retransmit_batches_caps_batch_size() {
+        let (sender, receiver) = crossbeam_channel::bounded(3);
+        let shreds: Vec<_> = (0..PACKETS_PER_BATCH * 2 + 1)
+            .map(|_| shred::Payload::from(vec![0u8]))
+            .collect();
+
+        let Ok(num_overflow_shreds) = send_retransmit_batches(&sender, &shreds) else {
+            panic!("retransmit channel unexpectedly disconnected");
+        };
+        assert_eq!(num_overflow_shreds, 0);
+
+        let batch_sizes = receiver.try_iter().map(|batch| batch.len()).collect_vec();
+        assert_eq!(batch_sizes, [PACKETS_PER_BATCH, PACKETS_PER_BATCH, 1]);
+    }
 
     #[test]
     fn test_sigverify_shreds_verify_batches() {

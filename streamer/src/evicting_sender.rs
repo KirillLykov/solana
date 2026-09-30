@@ -71,11 +71,11 @@ where
                 // Unlikely race condition -- it was just indicated that the channel is full.
                 // Attempt to requeue the message.
                 Err(TryRecvError::Empty) => self.sender.try_send(msg),
-                // Unreachable in practice since we maintain a reference to both the sender and receiver.
-                Err(TryRecvError::Disconnected) => unreachable!(),
+                // The underlying sender can have stronger disconnection semantics than the
+                // channel itself (for example, a worker-pool sender with no live workers).
+                Err(TryRecvError::Disconnected) => self.sender.try_send(msg),
             },
-            // Unreachable in practice since we maintain a reference to both the sender and receiver.
-            TrySendError::Disconnected(_) => unreachable!(),
+            TrySendError::Disconnected(msg) => Err(TrySendError::Disconnected(msg)),
         }
     }
 
