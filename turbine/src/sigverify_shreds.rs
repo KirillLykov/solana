@@ -18,7 +18,7 @@ use {
             layout::get_shred,
             wire::{is_retransmitter_signed_variant, resign_packet},
         },
-        sigverify_shreds::{LruCache, SlotPubkeys, verify_shred_cpu},
+        sigverify_shreds::{SlotPubkeys, verify_shred_cpu},
     },
     solana_perf::{
         deduper::Deduper,
@@ -39,9 +39,6 @@ use {
     },
     thiserror::Error,
 };
-
-// 34MB where each cache entry is 136 bytes.
-const SIGVERIFY_LRU_CACHE_CAPACITY: usize = 1 << 18;
 
 const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_NUM_BITS: u64 = 637_534_199; // 76MB
@@ -111,7 +108,6 @@ struct WorkerCounters {
 
 #[derive(Clone)]
 struct WorkerContext {
-    cache: Arc<RwLock<LruCache>>,
     cluster_info: Arc<ClusterInfo>,
     sharable_banks: SharableBanks,
     leader_schedule_cache: Arc<LeaderScheduleCache>,
@@ -172,7 +168,7 @@ fn verify_batch(batch: &mut PacketBatch, ctx: &WorkerContext, keypair: &Keypair)
             continue;
         }
 
-        if !verify_shred_cpu(packet.as_ref(), &slot_leaders, ctx.cache.as_ref()) {
+        if !verify_shred_cpu(packet.as_ref(), &slot_leaders) {
             packet.meta_mut().set_discard(true);
             counters.num_discards_post += 1;
             continue;
@@ -237,7 +233,6 @@ struct ShredSigverifyWorkers {
 impl ShredSigverifyWorkers {
     fn new(
         num_workers: NonZeroUsize,
-        cache: Arc<RwLock<LruCache>>,
         deduper: Arc<Deduper<2, [u8]>>,
         cluster_info: Arc<ClusterInfo>,
         bank_forks: Arc<RwLock<BankForks>>,
@@ -252,7 +247,6 @@ impl ShredSigverifyWorkers {
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
 
         let worker_context = WorkerContext {
-            cache,
             cluster_info,
             sharable_banks,
             leader_schedule_cache,
@@ -365,8 +359,6 @@ pub fn spawn_shred_sigverify(
 ) -> JoinHandle<()> {
     let mut stats = ShredSigVerifyStats::new(Instant::now());
 
-    let cache = Arc::new(RwLock::new(LruCache::new(SIGVERIFY_LRU_CACHE_CAPACITY)));
-
     let deduper = {
         let mut rng = rand::rng();
         Arc::new(Deduper::<2, [u8]>::new(&mut rng, DEDUPER_NUM_BITS))
@@ -379,7 +371,6 @@ pub fn spawn_shred_sigverify(
 
     let workers = ShredSigverifyWorkers::new(
         num_sigverify_threads,
-        cache,
         deduper.clone(),
         cluster_info.clone(),
         bank_forks.clone(),
@@ -835,24 +826,6 @@ mod tests {
         leader_schedule_cache: Arc<LeaderScheduleCache>,
         num_workers: usize,
     ) -> ShredSigverifyWorkers {
-        let cache = Arc::new(RwLock::new(LruCache::new(/*capacity:*/ 128)));
-
-        new_sigverify_workers_with_cache(
-            cluster_info,
-            bank_forks,
-            leader_schedule_cache,
-            cache,
-            num_workers,
-        )
-    }
-    // Allows panic-path tests to inject a poisoned cache.
-    fn new_sigverify_workers_with_cache(
-        cluster_info: Arc<ClusterInfo>,
-        bank_forks: Arc<RwLock<BankForks>>,
-        leader_schedule_cache: Arc<LeaderScheduleCache>,
-        cache: Arc<RwLock<LruCache>>,
-        num_workers: usize,
-    ) -> ShredSigverifyWorkers {
         let deduper = {
             let mut rng = rand::rng();
             Arc::new(Deduper::<2, [u8]>::new(&mut rng, DEDUPER_NUM_BITS))
@@ -865,76 +838,12 @@ mod tests {
 
         ShredSigverifyWorkers::new(
             NonZeroUsize::new(num_workers).unwrap(),
-            cache,
             deduper,
             cluster_info,
             bank_forks,
             leader_schedule_cache,
             cluster_nodes_cache,
         )
-    }
-    #[test]
-    #[should_panic(expected = "shred sigverify worker panicked")]
-    fn test_sigverify_worker_panic_is_propagated() {
-        let leader_keypair = Arc::new(Keypair::new());
-        let node_keypair = Arc::new(Keypair::new());
-        let leader_pubkey = leader_keypair.pubkey();
-        let node_pubkey = node_keypair.pubkey();
-
-        let bank = Bank::new_for_tests(
-            &create_genesis_config_with_leader(100, &leader_pubkey, 10).genesis_config,
-        );
-        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(&bank));
-        let bank_forks = BankForks::new_rw_arc(bank);
-
-        let cluster_info = Arc::new(ClusterInfo::new(
-            ContactInfo::new_localhost(&node_pubkey, timestamp()),
-            node_keypair.clone(),
-            SocketAddrSpace::Unspecified,
-        ));
-
-        let cache = Arc::new(RwLock::new(LruCache::new(/*capacity:*/ 128)));
-        let cache_to_poison = cache.clone();
-
-        let poison_result = std::thread::spawn(move || {
-            let _guard = cache_to_poison.write().unwrap();
-            panic!("poison shred sigverify cache");
-        })
-        .join();
-
-        assert!(poison_result.is_err());
-
-        let workers = new_sigverify_workers_with_cache(
-            cluster_info,
-            bank_forks,
-            leader_schedule_cache,
-            cache,
-            1,
-        );
-
-        let entries = create_ticks(1, 1, Hash::new_unique());
-        let shredder = Shredder::new(1, 0, 1, 0).unwrap();
-
-        let (shreds, _) = shredder.entries_to_merkle_shreds_for_tests(
-            &leader_keypair,
-            &entries,
-            false,
-            Hash::new_unique(),
-            0,
-            0,
-            &ReedSolomonCache::default(),
-            &mut ProcessShredsStats::default(),
-        );
-
-        let shred = &shreds[0];
-        let mut batch = RecycledPacketBatch::with_capacity(1);
-        batch.resize(1, Packet::default());
-        batch[0].buffer_mut()[..shred.payload().len()].copy_from_slice(shred.payload());
-        batch[0].meta_mut().size = shred.payload().len();
-
-        let mut batches = vec![PacketBatch::from(batch)];
-
-        workers.process_batches(&mut batches, &node_keypair);
     }
 
     #[test]

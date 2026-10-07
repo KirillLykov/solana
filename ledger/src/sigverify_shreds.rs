@@ -1,27 +1,34 @@
 #![allow(clippy::implicit_hasher)]
 use {
-    crate::shred,
-    solana_clock::Slot,
-    solana_hash::Hash,
-    solana_nohash_hasher::BuildNoHashHasher,
-    solana_perf::packet::PacketRef,
-    solana_pubkey::Pubkey,
-    solana_signature::Signature,
-    std::{collections::HashMap, sync::RwLock},
+    crate::shred, solana_clock::Slot, solana_nohash_hasher::BuildNoHashHasher,
+    solana_perf::packet::PacketRef, solana_pubkey::Pubkey, std::collections::HashMap,
 };
 #[cfg(test)]
 use {solana_keypair::Keypair, solana_perf::packet::PacketRefMut, solana_signer::Signer};
 
-pub type LruCache = lazy_lru::LruCache<(Signature, Pubkey, /*merkle root:*/ Hash), ()>;
-
 pub type SlotPubkeys = HashMap<Slot, Pubkey, BuildNoHashHasher<Slot>>;
 
 #[must_use]
-pub fn verify_shred_cpu(
-    packet: PacketRef,
-    slot_leaders: &SlotPubkeys,
-    cache: &RwLock<LruCache>,
-) -> bool {
+pub fn verify_shred_with_leader(packet: PacketRef, leader: &Pubkey) -> bool {
+    if packet.meta().discard() {
+        return false;
+    }
+    let Some(shred) = shred::layout::get_shred(packet) else {
+        return false;
+    };
+    let Some(signature) = shred::layout::get_signature(shred) else {
+        return false;
+    };
+    trace!("signature {signature}");
+    let Some(merkle_root) = shred::layout::get_merkle_root(shred) else {
+        return false;
+    };
+
+    signature.verify(leader.as_ref(), merkle_root.as_ref())
+}
+
+#[must_use]
+pub fn verify_shred_cpu(packet: PacketRef, slot_leaders: &SlotPubkeys) -> bool {
     if packet.meta().discard() {
         return false;
     }
@@ -35,23 +42,7 @@ pub fn verify_shred_cpu(
     let Some(pubkey) = slot_leaders.get(&slot) else {
         return false;
     };
-    let Some(signature) = shred::layout::get_signature(shred) else {
-        return false;
-    };
-    trace!("signature {signature}");
-    let Some(data) = shred::layout::get_merkle_root(shred) else {
-        return false;
-    };
-
-    let key = (signature, *pubkey, data);
-    if cache.read().unwrap().get(&key).is_some() {
-        true
-    } else if key.0.verify(key.1.as_ref(), key.2.as_ref()) {
-        cache.write().unwrap().put(key, ());
-        true
-    } else {
-        false
-    }
+    verify_shred_with_leader(packet, pubkey)
 }
 
 #[cfg(test)]
@@ -105,16 +96,10 @@ mod tests {
         }
     }
 
-    fn verify_batches(
-        batches: &mut [PacketBatch],
-        slot_leaders: &SlotPubkeys,
-        cache: &RwLock<LruCache>,
-    ) {
+    fn verify_batches(batches: &mut [PacketBatch], slot_leaders: &SlotPubkeys) {
         for batch in batches {
             for mut packet in batch.iter_mut() {
-                if !packet.meta().discard()
-                    && !verify_shred_cpu(packet.as_ref(), slot_leaders, cache)
-                {
+                if !packet.meta().discard() && !verify_shred_cpu(packet.as_ref(), slot_leaders) {
                     packet.meta_mut().set_discard(true);
                 }
             }
@@ -124,7 +109,6 @@ mod tests {
     fn run_test_sigverify_shred_cpu(slot: Slot) {
         agave_logger::setup();
         let mut packet = Packet::default();
-        let cache = RwLock::new(LruCache::new(/*capacity:*/ 128));
         let shredder = Shredder::new(slot, slot.saturating_sub(1), 0, 0).unwrap();
         let keypair = Keypair::new();
         let reed_solomon_cache = ReedSolomonCache::default();
@@ -145,14 +129,14 @@ mod tests {
         packet.meta_mut().size = shred.payload().len();
 
         let leader_slots: SlotPubkeys = [(slot, keypair.pubkey())].into_iter().collect();
-        assert!(verify_shred_cpu((&packet).into(), &leader_slots, &cache));
+        assert!(verify_shred_cpu((&packet).into(), &leader_slots));
 
         let wrong_keypair = Keypair::new();
         let leader_slots: SlotPubkeys = [(slot, wrong_keypair.pubkey())].into_iter().collect();
-        assert!(!verify_shred_cpu((&packet).into(), &leader_slots, &cache));
+        assert!(!verify_shred_cpu((&packet).into(), &leader_slots));
 
         let leader_slots: SlotPubkeys = HashMap::default();
-        assert!(!verify_shred_cpu((&packet).into(), &leader_slots, &cache));
+        assert!(!verify_shred_cpu((&packet).into(), &leader_slots));
     }
 
     #[test]
@@ -261,7 +245,6 @@ mod tests {
     #[test_case(false)]
     fn test_verify_shreds_fuzz(is_last_in_slot: bool) {
         let mut rng = rand::rng();
-        let cache = RwLock::new(LruCache::new(/*capacity:*/ 128));
         let keypairs = repeat_with(|| rng.random_range(169_367_809..169_906_789))
             .map(|slot| (slot, Keypair::new()))
             .take(3)
@@ -274,7 +257,7 @@ mod tests {
             .collect();
         let mut packets = make_packets(&mut rng, &shreds);
 
-        verify_batches(&mut packets, &pubkeys, &cache);
+        verify_batches(&mut packets, &pubkeys);
         assert!(
             packets
                 .iter()
@@ -299,7 +282,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        verify_batches(&mut packets, &pubkeys, &cache);
+        verify_batches(&mut packets, &pubkeys);
         assert!(
             packets
                 .iter()
@@ -317,7 +300,6 @@ mod tests {
     #[test_case(false)]
     fn test_sign_shreds(is_last_in_slot: bool) {
         let mut rng = rand::rng();
-        let cache = RwLock::new(LruCache::new(/*capacity:*/ 128));
         let shreds = {
             let keypairs = repeat_with(|| rng.random_range(169_367_809..169_906_789))
                 .map(|slot| (slot, Keypair::new()))
@@ -338,7 +320,7 @@ mod tests {
         let mut packets = make_packets(&mut rng, &shreds);
 
         // Assert that initially all signatures are invalid.
-        verify_batches(&mut packets, &pubkeys, &cache);
+        verify_batches(&mut packets, &pubkeys);
         assert!(
             packets
                 .iter()
@@ -354,7 +336,7 @@ mod tests {
 
         // Sign and verify shred signatures.
         sign_shreds(&keypair, &mut packets);
-        verify_batches(&mut packets, &pubkeys, &cache);
+        verify_batches(&mut packets, &pubkeys);
         assert!(
             packets
                 .iter()
