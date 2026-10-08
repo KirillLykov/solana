@@ -18,7 +18,7 @@ use {
             layout::get_shred,
             wire::{is_retransmitter_signed_variant, resign_packet},
         },
-        sigverify_shreds::{SlotPubkeys, verify_shred_cpu},
+        sigverify_shreds::{LruCache, SlotPubkeys, verify_shred_cpu},
     },
     solana_perf::{
         deduper::Deduper,
@@ -43,6 +43,8 @@ use {
 const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_NUM_BITS: u64 = 637_534_199; // 76MB
 const DEDUPER_RESET_CYCLE: Duration = Duration::from_secs(5 * 60);
+// 34MB where each cache entry is 136 bytes.
+const SIGVERIFY_LRU_CACHE_CAPACITY: usize = 1 << 18;
 
 // Num epochs capacity should be at least 2 because near the epoch boundary we
 // may receive shreds from the other side of the epoch boundary. Because of the
@@ -113,6 +115,7 @@ struct WorkerContext {
     leader_schedule_cache: Arc<LeaderScheduleCache>,
     cluster_nodes_cache: Arc<ClusterNodesCache<RetransmitStage>>,
     deduper: Arc<Deduper<2, [u8]>>,
+    sigverify_cache: Arc<RwLock<LruCache>>,
 }
 
 fn verify_batch(batch: &mut PacketBatch, ctx: &WorkerContext, keypair: &Keypair) -> WorkerCounters {
@@ -168,7 +171,7 @@ fn verify_batch(batch: &mut PacketBatch, ctx: &WorkerContext, keypair: &Keypair)
             continue;
         }
 
-        if !verify_shred_cpu(packet, &slot_leaders) {
+        if !verify_shred_cpu(packet, &slot_leaders, ctx.sigverify_cache.as_ref()) {
             packet.meta_mut().set_discard(true);
             counters.num_discards_post += 1;
             continue;
@@ -252,6 +255,7 @@ impl ShredSigverifyWorkers {
             leader_schedule_cache,
             cluster_nodes_cache,
             deduper,
+            sigverify_cache: Arc::new(RwLock::new(LruCache::new(SIGVERIFY_LRU_CACHE_CAPACITY))),
         };
 
         let worker_handles = WorkerHandles(

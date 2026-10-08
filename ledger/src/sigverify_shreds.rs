@@ -2,13 +2,17 @@
 use {
     crate::shred,
     solana_clock::Slot,
+    solana_hash::Hash,
     solana_nohash_hasher::BuildNoHashHasher,
     solana_perf::packet::BytesPacket,
     solana_pubkey::Pubkey,
-    std::collections::HashMap,
+    solana_signature::Signature,
+    std::{collections::HashMap, sync::RwLock},
 };
 #[cfg(test)]
 use {solana_keypair::Keypair, solana_signer::Signer};
+
+pub type LruCache = lazy_lru::LruCache<(Signature, Pubkey, /*merkle root:*/ Hash), ()>;
 
 pub type SlotPubkeys = HashMap<Slot, Pubkey, BuildNoHashHasher<Slot>>;
 
@@ -32,7 +36,11 @@ pub fn verify_shred_with_leader(packet: &BytesPacket, leader: &Pubkey) -> bool {
 }
 
 #[must_use]
-pub fn verify_shred_cpu(packet: &BytesPacket, slot_leaders: &SlotPubkeys) -> bool {
+pub fn verify_shred_cpu(
+    packet: &BytesPacket,
+    slot_leaders: &SlotPubkeys,
+    cache: &RwLock<LruCache>,
+) -> bool {
     if packet.meta().discard() {
         return false;
     }
@@ -46,7 +54,23 @@ pub fn verify_shred_cpu(packet: &BytesPacket, slot_leaders: &SlotPubkeys) -> boo
     let Some(pubkey) = slot_leaders.get(&slot) else {
         return false;
     };
-    verify_shred_with_leader(packet, pubkey)
+    let Some(signature) = shred::layout::get_signature(shred) else {
+        return false;
+    };
+    trace!("signature {signature}");
+    let Some(merkle_root) = shred::layout::get_merkle_root(shred) else {
+        return false;
+    };
+
+    let key = (signature, *pubkey, merkle_root);
+    if cache.read().unwrap().get(&key).is_some() {
+        true
+    } else if key.0.verify(key.1.as_ref(), key.2.as_ref()) {
+        cache.write().unwrap().put(key, ());
+        true
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -99,10 +123,14 @@ mod tests {
         }
     }
 
-    fn verify_batches(batches: &mut [PacketBatch], slot_leaders: &SlotPubkeys) {
+    fn verify_batches(
+        batches: &mut [PacketBatch],
+        slot_leaders: &SlotPubkeys,
+        cache: &RwLock<LruCache>,
+    ) {
         for batch in batches {
             for packet in batch.iter_mut() {
-                if !packet.meta().discard() && !verify_shred_cpu(packet, slot_leaders) {
+                if !packet.meta().discard() && !verify_shred_cpu(packet, slot_leaders, cache) {
                     packet.meta_mut().set_discard(true);
                 }
             }
@@ -126,16 +154,17 @@ mod tests {
         assert_eq!(shred.slot(), slot);
         trace!("signature {}", shred.signature());
         let packet = shred.payload().to_bytes_packet(None);
+        let cache = RwLock::new(LruCache::new(/*capacity:*/ 128));
 
         let leader_slots: SlotPubkeys = [(slot, keypair.pubkey())].into_iter().collect();
-        assert!(verify_shred_cpu(&packet, &leader_slots));
+        assert!(verify_shred_cpu(&packet, &leader_slots, &cache));
 
         let wrong_keypair = Keypair::new();
         let leader_slots: SlotPubkeys = [(slot, wrong_keypair.pubkey())].into_iter().collect();
-        assert!(!verify_shred_cpu(&packet, &leader_slots));
+        assert!(!verify_shred_cpu(&packet, &leader_slots, &cache));
 
         let leader_slots: SlotPubkeys = HashMap::default();
-        assert!(!verify_shred_cpu(&packet, &leader_slots));
+        assert!(!verify_shred_cpu(&packet, &leader_slots, &cache));
     }
 
     #[test]
@@ -242,6 +271,7 @@ mod tests {
     #[test_case(false)]
     fn test_verify_shreds_fuzz(is_last_in_slot: bool) {
         let mut rng = rand::rng();
+        let cache = RwLock::new(LruCache::new(/*capacity:*/ 128));
         let keypairs = repeat_with(|| rng.random_range(169_367_809..169_906_789))
             .map(|slot| (slot, Keypair::new()))
             .take(3)
@@ -254,7 +284,7 @@ mod tests {
             .collect();
         let mut packets = make_packets(&mut rng, &shreds);
 
-        verify_batches(&mut packets, &pubkeys);
+        verify_batches(&mut packets, &pubkeys, &cache);
         assert!(
             packets
                 .iter()
@@ -279,7 +309,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        verify_batches(&mut packets, &pubkeys);
+        verify_batches(&mut packets, &pubkeys, &cache);
         assert!(
             packets
                 .iter()
@@ -297,6 +327,7 @@ mod tests {
     #[test_case(false)]
     fn test_sign_shreds(is_last_in_slot: bool) {
         let mut rng = rand::rng();
+        let cache = RwLock::new(LruCache::new(/*capacity:*/ 128));
         let shreds = {
             let keypairs = repeat_with(|| rng.random_range(169_367_809..169_906_789))
                 .map(|slot| (slot, Keypair::new()))
@@ -317,7 +348,7 @@ mod tests {
         let mut packets = make_packets(&mut rng, &shreds);
 
         // Assert that initially all signatures are invalid.
-        verify_batches(&mut packets, &pubkeys);
+        verify_batches(&mut packets, &pubkeys, &cache);
         assert!(
             packets
                 .iter()
@@ -333,7 +364,7 @@ mod tests {
 
         // Sign and verify shred signatures.
         sign_shreds(&keypair, &mut packets);
-        verify_batches(&mut packets, &pubkeys);
+        verify_batches(&mut packets, &pubkeys, &cache);
         assert!(
             packets
                 .iter()
