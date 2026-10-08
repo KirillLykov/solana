@@ -128,22 +128,28 @@ impl WeightedShuffle {
         let mut index = 0; // root
         loop {
             // SAFETY: function returns if index goes out of bounds.
-            let (offset, &node) = unsafe { self.tree.get_unchecked(index) }
-                .iter()
-                .enumerate()
-                .find(|&(_, node)| {
-                    if val < *node {
-                        true
-                    } else {
-                        val -= *node;
-                        false
-                    }
-                })
-                .unwrap();
+            let weights = unsafe { self.tree.get_unchecked(index) };
+            let mut offset = 0;
+            let mut prefix = 0u64;
+            let mut subtree_start = 0u64;
+            for i in 0..FANOUT {
+                // SAFETY: i is in 0..FANOUT, which is the length of weights.
+                let weight = unsafe { *weights.get_unchecked(i) };
+                prefix += weight;
+                let before_target = usize::from(prefix <= val);
+                offset += before_target;
+                subtree_start += weight & 0u64.wrapping_sub(before_target as u64);
+            }
+            // SAFETY: search starts with val less than the total remaining
+            // weight, and each descent keeps val within the selected subtree's
+            // total weight. Therefore the branchless scan above finds an
+            // offset in 0..FANOUT.
+            let weight = unsafe { *weights.get_unchecked(offset) };
+            val -= subtree_start;
             // Traverse to the subtree of self.tree[index].
             index = (index << BIT_SHIFT) + offset + 1;
             if self.tree.len() <= index {
-                return (index - self.num_nodes, node);
+                return (index - self.num_nodes, weight);
             }
         }
     }
