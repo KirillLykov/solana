@@ -305,13 +305,17 @@ pub fn new_cluster_nodes<T: 'static>(
     stakes: &HashMap<Pubkey, u64>,
 ) -> ClusterNodes<T> {
     let self_pubkey = cluster_info.id();
-    let nodes = get_nodes(cluster_info, cluster_type, stakes);
+    let broadcast = TypeId::of::<T>() == TypeId::of::<BroadcastStage>();
+    let nodes = if !broadcast {
+        get_nodes_spam(cluster_info, cluster_type, stakes)
+    } else {
+        get_nodes(cluster_info, cluster_type, stakes)
+    };
     let index: HashMap<_, _> = nodes
         .iter()
         .enumerate()
         .map(|(ix, node)| (*node.pubkey(), ix))
         .collect();
-    let broadcast = TypeId::of::<T>() == TypeId::of::<BroadcastStage>();
     let stakes = nodes.iter().map(|node| node.stake);
     let mut weighted_shuffle = WeightedShuffle::new("cluster-nodes", stakes);
     if broadcast {
@@ -356,6 +360,70 @@ fn get_nodes(
                 Node { node, stake }
             }),
     )
+    // All staked nodes.
+    .chain(
+        stakes
+            .iter()
+            .filter(|(_, stake)| **stake > 0)
+            .map(|(&pubkey, &stake)| Node {
+                node: NodeId::from(pubkey),
+                stake,
+            }),
+    )
+    .collect();
+    sort_and_dedup_nodes(&mut nodes);
+    if should_dedup_tvu_addrs {
+        dedup_tvu_addrs(&mut nodes);
+    };
+    nodes
+}
+
+fn get_nodes_spam(
+    cluster_info: &ClusterInfo,
+    cluster_type: ClusterType,
+    stakes: &HashMap<Pubkey, u64>,
+) -> Vec<Node> {
+    let self_pubkey = cluster_info.id();
+    let should_dedup_tvu_addrs = match cluster_type {
+        ClusterType::Development => false,
+        ClusterType::Devnet | ClusterType::Testnet | ClusterType::MainnetBeta => true,
+    };
+    let mut nodes: Vec<Node> = std::iter::once({
+        // The local node itself.
+        let stake = stakes.get(&self_pubkey).copied().unwrap_or_default();
+        let node = ContactInfo::from(&cluster_info.my_contact_info());
+        let node = NodeId::from(node);
+        Node { node, stake }
+    })
+    // All known tvu-peers from gossip.
+    .chain(
+        cluster_info
+            .tvu_peers(|node| ContactInfo::from(node))
+            .into_iter()
+            .map(|node| {
+                let stake = stakes.get(node.pubkey()).copied().unwrap_or_default();
+                let node = NodeId::from(node);
+                Node { node, stake }
+            }),
+    )
+    // Add a bunch of fake, unstaked nodes for testing.
+    .chain((0..5000).map(|i: u16| {
+        let addr_byte1 = (i / 256).min(255) as u8;
+
+        let addr_byte2 = (i % 256).min(255) as u8;
+
+        let contact_info = ContactInfo {
+            pubkey: Pubkey::new_unique(),
+            wallclock: timestamp(),
+            //tvu_quic: None,
+            tvu_udp: Some(SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 10, addr_byte1, addr_byte2)),
+                8080,
+            )),
+        };
+        let node = NodeId::from(contact_info);
+        Node { node, stake: 0 }
+    }))
     // All staked nodes.
     .chain(
         stakes
