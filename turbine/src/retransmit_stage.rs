@@ -53,6 +53,8 @@ const DEDUPER_NUM_BITS: u64 = 637_534_199; // 76MB
 const DEDUPER_RESET_CYCLE: Duration = Duration::from_secs(5 * 60);
 // Minimum number of shreds to use for parallel retransmit execution.
 const MIN_SHREDS_PER_RETRANSMIT_JOB: usize = 2;
+/// The number of shred batches to pull from the retransmit_receiver at a time.
+const RETRANSMIT_BATCH_SIZE: usize = 4096;
 
 const _: () = const {
     // From https://github.com/anza-xyz/agave/pull/1735#discussion_r1644899183:
@@ -141,7 +143,7 @@ impl RetransmitState {
     fn new(now: Instant) -> Self {
         Self {
             stats: RetransmitStats::new(now),
-            shred_buf: Vec::new(),
+            shred_buf: Vec::with_capacity(RETRANSMIT_BATCH_SIZE),
             pending_first_shred_event: None,
         }
     }
@@ -418,14 +420,14 @@ fn retransmit(context: &RetransmitContext, state: &mut RetransmitState) -> Resul
     for shreds in retransmit_receiver
         .try_iter()
         // We already pulled 1 batch
-        .take(num_workers - 1)
+        .take(RETRANSMIT_BATCH_SIZE - 1)
     {
         num_shreds += shreds.len();
         shred_buf.push(shreds);
     }
 
     stats.num_shreds += num_shreds;
-    stats.total_batches += shred_buf.len();
+    stats.total_batches += 1;
 
     let mut epoch_fetch = Measure::start("retransmit_epoch_fetch");
     let (working_bank, root_bank) = {
