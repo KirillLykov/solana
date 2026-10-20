@@ -27,7 +27,7 @@ use {
     solana_net_utils::PinnedXdpSender,
     solana_rayon_threadlimit::get_thread_count,
     solana_runtime::bank_forks::{BankForks, SharableBanks},
-    solana_streamer::evicting_sender::EvictingSender,
+    solana_turbine::retransmit_stage::RetransmitSender,
     std::{
         borrow::Cow,
         net::UdpSocket,
@@ -209,7 +209,7 @@ where
 
 pub struct WindowServiceChannels {
     pub verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
-    pub retransmit_sender: EvictingSender<Vec<shred::Payload>>,
+    pub retransmit_sender: RetransmitSender,
     pub completed_data_sets_sender: Option<CompletedDataSetsSender>,
     pub duplicate_slots_sender: DuplicateSlotSender,
     pub repair_service_channels: RepairServiceChannels,
@@ -219,7 +219,7 @@ pub struct WindowServiceChannels {
 impl WindowServiceChannels {
     pub fn new(
         verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
-        retransmit_sender: EvictingSender<Vec<shred::Payload>>,
+        retransmit_sender: RetransmitSender,
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
         duplicate_slots_sender: DuplicateSlotSender,
         repair_service_channels: RepairServiceChannels,
@@ -356,7 +356,7 @@ impl WindowService {
         verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
         check_duplicate_sender: Sender<PossibleDuplicateShred>,
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
-        retransmit_sender: EvictingSender<Vec<shred::Payload>>,
+        retransmit_sender: RetransmitSender,
     ) -> JoinHandle<()> {
         Builder::new()
             .name("solWinInsert".to_string())
@@ -583,7 +583,8 @@ mod test {
             .insert_shreds(vec![original_shred.clone()], false)
             .unwrap();
 
-        let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
+        let (retransmit_sender, retransmit_receiver) = agave_wake_channel::bounded(1);
+        let dummy_retransmit_sender = RetransmitSender::new(retransmit_sender, retransmit_receiver);
         let is_trusted = false;
         blockstore
             .insert_shreds_handle_duplicate(
@@ -671,7 +672,8 @@ mod test {
             let shreds = [&original_shred, &duplicate_shred]
                 .into_iter()
                 .map(|shred| (Cow::Borrowed(shred), /*is_repaired:*/ false));
-            let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
+            let (sender, receiver) = agave_wake_channel::bounded(1);
+            let dummy_retransmit_sender = RetransmitSender::new(sender, receiver);
             blockstore
                 .insert_shreds_handle_duplicate(
                     shreds,

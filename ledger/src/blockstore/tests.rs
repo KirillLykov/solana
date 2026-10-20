@@ -4925,7 +4925,8 @@ fn test_recovery() {
     let root_bank = Arc::new(Bank::new_for_tests(&genesis_config));
     let mut metrics = BlockstoreInsertionMetrics::default();
 
-    let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
+    let (sender, receiver) = agave_wake_channel::bounded(1);
+    let dummy_retransmit_sender = EvictingSender::new(sender, receiver);
     let coding_shreds = coding_shreds.into_iter().map(|shred| {
         (
             Cow::Owned(shred),
@@ -5001,7 +5002,8 @@ fn test_skip_alt_recovery() {
 
     let genesis_config = create_genesis_config(2).genesis_config;
     let root_bank = Arc::new(Bank::new_for_tests(&genesis_config));
-    let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
+    let (sender, receiver) = agave_wake_channel::bounded(1);
+    let dummy_retransmit_sender = EvictingSender::new(sender, receiver);
     let alternate_location = BlockLocation::Alternate {
         block_id: Hash::new_unique(),
     };
@@ -5106,7 +5108,8 @@ fn test_recovery_discards_unexpected_data_complete_shreds() {
             )
         })
         .collect();
-    let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
+    let (sender, receiver) = agave_wake_channel::bounded(1);
+    let dummy_retransmit_sender = EvictingSender::new(sender, receiver);
     let mut metrics = BlockstoreInsertionMetrics::default();
     blockstore
         .do_insert_shreds(
