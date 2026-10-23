@@ -120,16 +120,13 @@ mod tests {
     }
 
     fn set_stakes(staked_nodes: &RwLock<StakedNodes>, stakes: HashMap<Pubkey, u64>) {
-        *staked_nodes.write().unwrap() = StakedNodes::new(Arc::new(stakes), HashMap::new());
+        *staked_nodes.write().unwrap() = StakedNodes::new(Arc::new(stakes));
     }
 
     #[test]
     fn test_has_sufficient_stake() {
         let pubkey = Pubkey::new_unique();
-        let staked_nodes = RwLock::new(StakedNodes::new(
-            Arc::new(HashMap::from([(pubkey, 100)])),
-            HashMap::new(),
-        ));
+        let staked_nodes = RwLock::new(StakedNodes::new(Arc::new(HashMap::from([(pubkey, 100)]))));
         let context = TestConnectionContext {
             peer_type: ConnectionPeerType::Staked(100),
             remote_pubkey: Some(pubkey),

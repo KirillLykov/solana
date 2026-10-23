@@ -16,7 +16,6 @@ use {
             tower_storage::{NullTowerStorage, TowerStorage},
             verify_blockstore_root_with_vote_history,
         },
-        forwarding_stage::ForwardingClientConfig,
         repair::{
             self, repair_handler::RepairHandlerType, serve_repair_service::ServeRepairService,
         },
@@ -385,7 +384,6 @@ pub struct ValidatorConfig {
     pub process_ledger_before_services: bool,
     pub accounts_db_config: AccountsDbConfig,
     pub warp_slot: Option<Slot>,
-    pub staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
     pub validator_exit: Arc<RwLock<Exit>>,
     pub validator_exit_backpressure: HashMap<String, Arc<AtomicBool>>,
     pub no_wait_for_vote_to_start_leader: bool,
@@ -396,7 +394,6 @@ pub struct ValidatorConfig {
     pub block_production_method: BlockProductionMethod,
     pub block_production_num_workers: NonZeroUsize,
     pub block_production_scheduler_config: SchedulerConfig,
-    pub enable_block_production_forwarding: bool,
     pub enable_scheduler_bindings: bool,
     pub generator_config: Option<GeneratorConfig>,
     pub use_snapshot_archives_at_startup: UseSnapshotArchivesAtStartup,
@@ -465,7 +462,6 @@ impl ValidatorConfig {
             poh_hashes_per_batch: poh_service::DEFAULT_HASHES_PER_BATCH,
             process_ledger_before_services: false,
             warp_slot: None,
-            staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
             validator_exit: Arc::new(RwLock::new(Exit::default())),
             validator_exit_backpressure: HashMap::default(),
             no_wait_for_vote_to_start_leader: true,
@@ -477,8 +473,6 @@ impl ValidatorConfig {
             block_production_method: BlockProductionMethod::default(),
             block_production_num_workers: BankingStage::default_num_workers(),
             block_production_scheduler_config: SchedulerConfig::default(),
-            // enable forwarding by default for tests
-            enable_block_production_forwarding: true,
             enable_scheduler_bindings: false,
             generator_config: None,
             use_snapshot_archives_at_startup: UseSnapshotArchivesAtStartup::default(),
@@ -1245,9 +1239,6 @@ impl Validator {
 
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
 
-        let mut tpu_transactions_forwards_client_sockets =
-            Some(node.sockets.tpu_transaction_forwarding_clients);
-
         let vote_connection_cache = if vote_use_quic {
             let vote_connection_cache = ConnectionCache::new_with_client_options(
                 "connection_cache_vote_quic",
@@ -1791,19 +1782,6 @@ impl Validator {
         )
         .map_err(ValidatorError::Other)?;
 
-        let tpu_forwarding_client_config = {
-            let runtime_handle = tpu_client_next_runtime
-                .as_ref()
-                .map(TokioRuntime::handle)
-                .unwrap_or_else(|| current_runtime_handle.as_ref().unwrap());
-            ForwardingClientConfig {
-                stake_identity: Arc::as_ref(&identity_keypair),
-                tpu_client_sockets: tpu_transactions_forwards_client_sockets.take().unwrap(),
-                runtime_handle: runtime_handle.clone(),
-                cancel: cancel.clone(),
-                node_multihoming: node_multihoming.clone(),
-            }
-        };
         let (banking_control_sender, banking_control_receiver) = mpsc::channel(1);
         let tpu = Tpu::new_with_client(
             &cluster_info,
@@ -1817,7 +1795,6 @@ impl Validator {
                 transactions_quic: node.sockets.tpu_quic,
                 transactions_forwards_quic: node.sockets.tpu_forwards_quic,
                 vote_quic: node.sockets.tpu_vote_quic,
-                vote_forwarding_client: node.sockets.tpu_vote_forwarding_client,
             },
             rpc_subscriptions,
             transaction_status_sender,
@@ -1838,11 +1815,9 @@ impl Validator {
             replay_vote_sender,
             bank_notification_sender,
             duplicate_confirmed_slot_sender,
-            tpu_forwarding_client_config,
             &identity_keypair,
             config.runtime_config.log_messages_bytes_limit,
             &staked_nodes,
-            config.staked_nodes_overrides.clone(),
             banking_tracer_channels,
             tracer_thread,
             tpu_quic_server_config,
@@ -1854,7 +1829,6 @@ impl Validator {
             config.block_production_num_workers,
             config.block_production_scheduler_config.clone(),
             config.filter_keys.clone(),
-            config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
             banking_control_receiver,

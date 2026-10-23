@@ -14,10 +14,6 @@ use {
             VoteTracker,
         },
         fetch_stage::FetchStage,
-        forwarding_stage::{
-            ForwardAddressGetter, ForwardingClientConfig, SpawnForwardingStageResult,
-            spawn_forwarding_stage,
-        },
         sigverify_stage::SigVerifyStage,
         staked_nodes_updater_service::StakedNodesUpdaterService,
         tpu_entry_notifier::TpuEntryNotifier,
@@ -61,12 +57,12 @@ use {
         broadcast_stage::{BroadcastStage, BroadcastStageType},
     },
     std::{
-        collections::{HashMap, HashSet},
+        collections::HashSet,
         net::{Ipv4Addr, UdpSocket},
         num::NonZeroUsize,
         path::PathBuf,
         sync::{Arc, RwLock, atomic::AtomicBool},
-        thread::{self, JoinHandle},
+        thread,
     },
     tokio::sync::mpsc,
     tokio_util::sync::CancellationToken,
@@ -78,8 +74,6 @@ pub struct TpuSockets {
     pub transactions_quic: Vec<UdpSocket>,
     pub transactions_forwards_quic: Vec<UdpSocket>,
     pub vote_quic: Vec<UdpSocket>,
-    /// Client-side socket for the forwarding votes.
-    pub vote_forwarding_client: UdpSocket,
 }
 
 // Conservatively allow 20 TPS per validator.
@@ -103,7 +97,6 @@ pub struct Tpu {
     cluster_info_vote_listener: ClusterInfoVoteListener,
     sigverify_stage: SigVerifyStage,
     banking_stage: BankingStageHandle,
-    forwarding_stage: JoinHandle<()>,
     broadcast_stage: BroadcastStage,
     tpu_quic_t: thread::JoinHandle<()>,
     tpu_forwards_quic_t: thread::JoinHandle<()>,
@@ -141,11 +134,9 @@ impl Tpu {
         replay_vote_sender: ReplayVoteSender,
         bank_notification_sender: Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
-        tpu_forwarding_client_config: ForwardingClientConfig,
         keypair: &Keypair,
         log_messages_bytes_limit: Option<usize>,
         staked_nodes: &Arc<RwLock<StakedNodes>>,
-        shared_staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
         banking_tracer_channels: Channels,
         tracer_thread_hdl: TracerThread,
         tpu_quic_server_config: SwQosQuicStreamerConfig,
@@ -157,7 +148,6 @@ impl Tpu {
         block_production_num_workers: NonZeroUsize,
         block_production_scheduler_config: SchedulerConfig,
         filter_keys: Arc<HashSet<Pubkey>>,
-        enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         banking_control_receiver: mpsc::Receiver<BankingControlMsg>,
@@ -171,7 +161,6 @@ impl Tpu {
             transactions_quic: transactions_quic_sockets,
             transactions_forwards_quic: transactions_forwards_quic_sockets,
             vote_quic: tpu_vote_quic_sockets,
-            vote_forwarding_client: vote_forwarding_client_socket,
         } = sockets;
 
         let (packet_sender, packet_receiver) = bounded(TPU_CHANNEL_SIZE);
@@ -190,12 +179,8 @@ impl Tpu {
             None, // coalesce
         );
 
-        let staked_nodes_updater_service = StakedNodesUpdaterService::new(
-            exit.clone(),
-            bank_forks.clone(),
-            staked_nodes.clone(),
-            shared_staked_nodes_overrides,
-        );
+        let staked_nodes_updater_service =
+            StakedNodesUpdaterService::new(exit.clone(), bank_forks.clone(), staked_nodes.clone());
 
         let Channels {
             non_vote_sender,
@@ -273,8 +258,6 @@ impl Tpu {
         )
         .unwrap();
 
-        let (forward_stage_sender, forward_stage_receiver) = bounded(50_000);
-
         // Shared between sigverify and scheduler. The scheduler publishes
         // a priority floor under saturation; sigverify reads it and drops
         // below-floor packets ahead of signature verification.
@@ -285,9 +268,7 @@ impl Tpu {
             vote_packet_receiver,
             non_vote_sender,
             tpu_vote_sender,
-            forward_stage_sender.clone(),
             tpu_sigverify_threads,
-            enable_block_production_forwarding,
             bank_forks.read().unwrap().sharable_banks(),
             Some(scheduler_priority_floor.clone()),
         );
@@ -335,17 +316,6 @@ impl Tpu {
         #[cfg(not(unix))]
         assert!(scheduler_bindings.is_none());
 
-        let SpawnForwardingStageResult {
-            join_handle: forwarding_stage,
-            client_updater,
-        } = spawn_forwarding_stage(
-            forward_stage_receiver,
-            tpu_forwarding_client_config,
-            vote_forwarding_client_socket,
-            bank_forks.read().unwrap().sharable_banks(),
-            ForwardAddressGetter::new(cluster_info.clone(), poh_recorder.clone()),
-        );
-
         let (entry_receiver, tpu_entry_notifier) =
             if let Some(entry_notification_sender) = entry_notification_sender {
                 // Preserve every message while bounding memory. If BroadcastStage falls behind,
@@ -381,14 +351,12 @@ impl Tpu {
         key_notifiers.add(KeyUpdaterType::Tpu, key_updater);
         key_notifiers.add(KeyUpdaterType::TpuForwards, forwards_key_updater);
         key_notifiers.add(KeyUpdaterType::TpuVote, vote_streamer_key_updater);
-        key_notifiers.add(KeyUpdaterType::Forward, client_updater);
 
         Self {
             fetch_stage,
             cluster_info_vote_listener,
             sigverify_stage,
             banking_stage,
-            forwarding_stage,
             broadcast_stage,
             tpu_quic_t,
             tpu_forwards_quic_t,
@@ -405,7 +373,6 @@ impl Tpu {
             self.cluster_info_vote_listener.join(),
             self.sigverify_stage.join(),
             self.banking_stage.join(),
-            self.forwarding_stage.join(),
             self.staked_nodes_updater_service.join(),
             self.tpu_quic_t.join(),
             self.tpu_forwards_quic_t.join(),

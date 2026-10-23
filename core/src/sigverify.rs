@@ -130,18 +130,12 @@ impl GossipSigVerifier {
 /// Gossip votes use a bounded queue into the worker pool.
 const SIGVERIFY_GOSSIP_VOTE_WORK_CHANNEL_SIZE: usize = 50_000;
 
-pub(crate) struct SigVerifyWorkerSenders {
-    pub(crate) gossip_verified_vote_sender: Sender<GossipVerifiedVoteBatch>,
-    pub(crate) forward_stage_sender: Sender<(BankingPacketBatch, bool)>,
-}
-
 #[derive(Clone)]
 struct WorkerPoolChannels {
     non_vote_receiver: Receiver<PacketBatch>,
     tpu_vote_receiver: Receiver<PacketBatch>,
     gossip_receiver: Receiver<GossipVerifyTask>,
     gossip_verified_vote_sender: Sender<GossipVerifiedVoteBatch>,
-    forward_stage_sender: Sender<(BankingPacketBatch, bool)>,
     sharable_banks: SharableBanks,
     non_vote_state: SigVerifyWorkerState,
     tpu_vote_state: SigVerifyWorkerState,
@@ -169,8 +163,7 @@ impl SigVerifyWorkerPool {
         num_workers: NonZeroUsize,
         non_vote_receiver: Receiver<PacketBatch>,
         tpu_vote_receiver: Receiver<PacketBatch>,
-        senders: SigVerifyWorkerSenders,
-        forward_non_votes: bool,
+        gossip_verified_vote_sender: Sender<GossipVerifiedVoteBatch>,
         sharable_banks: SharableBanks,
         non_vote_state: SigVerifyWorkerState,
         tpu_vote_state: SigVerifyWorkerState,
@@ -180,8 +173,7 @@ impl SigVerifyWorkerPool {
             non_vote_receiver,
             tpu_vote_receiver,
             gossip_receiver,
-            gossip_verified_vote_sender: senders.gossip_verified_vote_sender,
-            forward_stage_sender: senders.forward_stage_sender,
+            gossip_verified_vote_sender,
             sharable_banks,
             non_vote_state,
             tpu_vote_state,
@@ -194,7 +186,7 @@ impl SigVerifyWorkerPool {
 
                 std::thread::Builder::new()
                     .name(format!("solSigVerify{idx:02}"))
-                    .spawn(move || Self::worker(exit, channels, forward_non_votes))
+                    .spawn(move || Self::worker(exit, channels))
                     .expect("failed to spawn sigverify worker thread")
             })
             .collect();
@@ -211,24 +203,21 @@ impl SigVerifyWorkerPool {
         }
     }
 
-    fn worker(exit: Arc<AtomicBool>, channels: WorkerPoolChannels, forward_non_votes: bool) {
+    fn worker(exit: Arc<AtomicBool>, channels: WorkerPoolChannels) {
         while !exit.load(Ordering::Relaxed) {
-            if !Self::worker_iteration(&channels, forward_non_votes) {
+            if !Self::worker_iteration(&channels) {
                 break;
             }
         }
     }
 
     /// Returns false if some channel connection is disconnected.
-    fn worker_iteration(channels: &WorkerPoolChannels, forward_non_votes: bool) -> bool {
+    fn worker_iteration(channels: &WorkerPoolChannels) -> bool {
         crossbeam_channel::select! {
             recv(&channels.non_vote_receiver) -> maybe_work => {
                 match maybe_work {
                     Ok(batch) => Self::run_transaction_task(
                         batch,
-                        false,
-                        &channels.forward_stage_sender,
-                        forward_non_votes,
                         false,
                         &channels.sharable_banks,
                         &channels.non_vote_state,
@@ -240,9 +229,6 @@ impl SigVerifyWorkerPool {
                 match maybe_work {
                     Ok(batch) => Self::run_transaction_task(
                         batch,
-                        true,
-                        &channels.forward_stage_sender,
-                        true,
                         true,
                         &channels.sharable_banks,
                         &channels.tpu_vote_state,
@@ -266,9 +252,6 @@ impl SigVerifyWorkerPool {
     fn run_transaction_task(
         mut batch: PacketBatch,
         reject_non_vote: bool,
-        forward_stage_sender: &Sender<(BankingPacketBatch, bool)>,
-        should_forward: bool,
-        is_tpu_vote: bool,
         sharable_banks: &SharableBanks,
         state: &SigVerifyWorkerState,
     ) -> bool {
@@ -316,8 +299,7 @@ impl SigVerifyWorkerPool {
                         .fetch_add(dropped, Ordering::Relaxed);
                 }
                 if all_below {
-                    // Entire batch went below-floor: nothing left to verify or
-                    // forward.
+                    // Entire batch went below-floor: nothing left to verify.
                     return true;
                 }
             }
@@ -348,10 +330,7 @@ impl SigVerifyWorkerPool {
             .stats
             .max_pre_send_len
             .fetch_max(state.banking_stage_sender.len(), Ordering::Relaxed);
-        match state
-            .banking_stage_sender
-            .send(banking_packet_batch.clone())
-        {
+        match state.banking_stage_sender.send(banking_packet_batch) {
             Ok(0) => {} // avoid poking atomics if nothing was evicted (typical case)
             Ok(evicted) => {
                 // record evicted amount into metrics
@@ -364,9 +343,6 @@ impl SigVerifyWorkerPool {
                 error!("sigverify send to banking failed: {err:?}");
                 return false;
             }
-        }
-        if should_forward {
-            Self::try_forward(forward_stage_sender, banking_packet_batch, is_tpu_vote);
         }
 
         true
@@ -387,18 +363,6 @@ impl SigVerifyWorkerPool {
         }
 
         true
-    }
-
-    fn try_forward(
-        forward_stage_sender: &Sender<(BankingPacketBatch, bool)>,
-        banking_packet_batch: BankingPacketBatch,
-        is_tpu_vote: bool,
-    ) {
-        if let Err(TrySendError::Full(_)) =
-            forward_stage_sender.try_send((banking_packet_batch, is_tpu_vote))
-        {
-            warn!("forwarding stage channel is full, dropping packets.");
-        }
     }
 }
 

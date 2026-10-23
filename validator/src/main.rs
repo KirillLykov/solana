@@ -100,9 +100,6 @@ pub fn main() {
             commands::exit::execute(subcommand_matches, &ledger_path)
         }
         ("monitor", _) => commands::monitor::execute(&matches, &ledger_path),
-        ("staked-nodes-overrides", Some(subcommand_matches)) => {
-            commands::staked_nodes_overrides::execute(subcommand_matches, &ledger_path)
-        }
         ("set-identity", Some(subcommand_matches)) => {
             commands::set_identity::execute(subcommand_matches, &ledger_path)
         }

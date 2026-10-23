@@ -620,19 +620,6 @@ pub fn add_args<'a>(app: App<'a, 'a>, default_args: &'a DefaultArgs) -> App<'a, 
             ),
     )
     .arg(
-        Arg::with_name("staked_nodes_overrides")
-            .long("staked-nodes-overrides")
-            .value_name("PATH")
-            .takes_value(true)
-            .help(
-                "Provide path to a yaml file with custom overrides for stakes of specific \
-                 identities. Overriding the amount of stake this validator considers as valid for \
-                 other peers in network. The stake amount is used for calculating the number of \
-                 QUIC streams permitted from the peer and vote packet sender stage. Format of the \
-                 file: `staked_map_id: {<pubkey>: <SOL stake amount>}",
-            ),
-    )
-    .arg(
         Arg::with_name("bind_address")
             .long("bind-address")
             .value_name("HOST")

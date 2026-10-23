@@ -50,7 +50,6 @@ pub fn safe_clone_config(config: &ValidatorConfig) -> ValidatorConfig {
         enforce_ulimit_nofile: config.enforce_ulimit_nofile,
         poh_pinned_cpu_core: config.poh_pinned_cpu_core,
         warp_slot: config.warp_slot,
-        staked_nodes_overrides: config.staked_nodes_overrides.clone(),
         validator_exit: Arc::new(RwLock::new(Exit::default())),
         validator_exit_backpressure: config
             .validator_exit_backpressure
@@ -68,7 +67,6 @@ pub fn safe_clone_config(config: &ValidatorConfig) -> ValidatorConfig {
         block_production_method: config.block_production_method.clone(),
         block_production_num_workers: config.block_production_num_workers,
         block_production_scheduler_config: config.block_production_scheduler_config.clone(),
-        enable_block_production_forwarding: config.enable_block_production_forwarding,
         enable_scheduler_bindings: config.enable_scheduler_bindings,
         generator_config: config.generator_config.clone(),
         use_snapshot_archives_at_startup: config.use_snapshot_archives_at_startup,

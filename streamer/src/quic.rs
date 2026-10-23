@@ -744,7 +744,6 @@ mod test {
         },
         crossbeam_channel::{Receiver, bounded},
         solana_net_utils::sockets::bind_to_localhost_unique,
-        solana_pubkey::Pubkey,
         solana_signer::Signer,
         std::{
             collections::HashMap,
@@ -920,10 +919,7 @@ mod test {
             (client_keypair.pubkey(), 1_000), // very small staked node
             (rich_node_keypair.pubkey(), 1_000_000_000),
         ]);
-        let staked_nodes = StakedNodes::new(
-            Arc::new(stakes),
-            HashMap::<Pubkey, u64>::default(), // overrides
-        );
+        let staked_nodes = StakedNodes::new(Arc::new(stakes));
 
         let server_params = QuicStreamerConfig::default_for_tests();
         let qos_config = SimpleQosConfig {
@@ -956,10 +952,10 @@ mod test {
     fn test_simple_qos_banned_pubkey_rejected_across_source_ip() {
         agave_logger::setup();
         let client_keypair = Keypair::new();
-        let staked_nodes = Arc::new(RwLock::new(StakedNodes::new(
-            Arc::new(HashMap::from([(client_keypair.pubkey(), 1_000)])),
-            HashMap::<Pubkey, u64>::default(),
-        )));
+        let staked_nodes = Arc::new(RwLock::new(StakedNodes::new(Arc::new(HashMap::from([(
+            client_keypair.pubkey(),
+            1_000,
+        )])))));
 
         let server_params = SimpleQosQuicStreamerConfig {
             quic_streamer_config: QuicStreamerConfig::default_for_tests(),

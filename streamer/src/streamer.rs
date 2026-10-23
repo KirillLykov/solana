@@ -88,7 +88,6 @@ pub(crate) const SOCKET_READ_TIMEOUT: Duration = Duration::from_secs(1);
 #[derive(Default)]
 pub struct StakedNodes {
     stakes: Arc<HashMap<Pubkey, u64>>,
-    overrides: HashMap<Pubkey, u64>,
     total_stake: u64,
 }
 
@@ -412,33 +411,16 @@ impl StreamerSendStats {
 }
 
 impl StakedNodes {
-    fn calculate_total_stake(
-        stakes: &HashMap<Pubkey, u64>,
-        overrides: &HashMap<Pubkey, u64>,
-    ) -> u64 {
-        stakes
-            .iter()
-            .filter(|(pubkey, _)| !overrides.contains_key(pubkey))
-            .map(|(_, &stake)| stake)
-            .chain(overrides.values().copied())
-            .sum()
-    }
-
-    pub fn new(stakes: Arc<HashMap<Pubkey, u64>>, overrides: HashMap<Pubkey, u64>) -> Self {
-        let total_stake = Self::calculate_total_stake(&stakes, &overrides);
+    pub fn new(stakes: Arc<HashMap<Pubkey, u64>>) -> Self {
+        let total_stake = stakes.values().copied().sum();
         Self {
             stakes,
-            overrides,
             total_stake,
         }
     }
 
     pub fn get_node_stake(&self, pubkey: &Pubkey) -> Option<u64> {
-        self.overrides
-            .get(pubkey)
-            .or_else(|| self.stakes.get(pubkey))
-            .filter(|&&stake| stake > 0)
-            .copied()
+        self.stakes.get(pubkey).filter(|&&stake| stake > 0).copied()
     }
 
     #[inline]
@@ -564,6 +546,29 @@ mod test {
             time::Duration,
         },
     };
+
+    #[test]
+    fn test_staked_nodes_lookup_and_total() {
+        let staked = Pubkey::new_unique();
+        let other_staked = Pubkey::new_unique();
+        let zero_staked = Pubkey::new_unique();
+        let missing = Pubkey::new_unique();
+        let nodes = StakedNodes::new(Arc::new(HashMap::from([
+            (staked, 100),
+            (other_staked, 200),
+            (zero_staked, 0),
+        ])));
+
+        assert_eq!(nodes.get_node_stake(&staked), Some(100));
+        assert_eq!(nodes.get_node_stake(&other_staked), Some(200));
+        assert_eq!(nodes.get_node_stake(&zero_staked), None);
+        assert_eq!(nodes.get_node_stake(&missing), None);
+        assert_eq!(nodes.total_stake(), 300);
+
+        let empty = StakedNodes::new(Arc::new(HashMap::new()));
+        assert_eq!(empty.total_stake(), 0);
+        assert_eq!(empty.get_node_stake(&staked), None);
+    }
 
     struct TestUdpSocketSender {
         socket: Arc<UdpSocket>,

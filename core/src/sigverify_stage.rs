@@ -7,13 +7,13 @@ use {
     crate::{
         banking_trace::BankingPacketSender,
         sigverify::{
-            GossipSigVerifier, GossipVerifiedVoteBatch, SigVerifyWorkerPool,
-            SigVerifyWorkerSenders, SigVerifyWorkerState, SigVerifyWorkerStats,
+            GossipSigVerifier, GossipVerifiedVoteBatch, SigVerifyWorkerPool, SigVerifyWorkerState,
+            SigVerifyWorkerStats,
         },
     },
-    agave_banking_stage_ingress_types::{BankingPacketBatch, SchedulerPriorityFloor},
+    agave_banking_stage_ingress_types::SchedulerPriorityFloor,
     core::time::Duration,
-    crossbeam_channel::{Receiver, Sender, unbounded},
+    crossbeam_channel::{Receiver, unbounded},
     solana_perf::{deduper::Deduper, packet::PacketBatch},
     solana_runtime::bank_forks::SharableBanks,
     solana_transaction::Transaction,
@@ -151,9 +151,7 @@ impl SigVerifyStage {
         vote_packet_receiver: Receiver<PacketBatch>,
         non_vote_sender: BankingPacketSender,
         tpu_vote_sender: BankingPacketSender,
-        forward_stage_sender: Sender<(BankingPacketBatch, bool)>,
         num_workers: NonZeroUsize,
-        forward_non_votes: bool,
         sharable_banks: SharableBanks,
         scheduler_priority_floor: Option<Arc<SchedulerPriorityFloor>>,
     ) -> (Self, GossipSigVerifyHandle) {
@@ -168,11 +166,7 @@ impl SigVerifyStage {
             num_workers,
             packet_receiver,
             vote_packet_receiver,
-            SigVerifyWorkerSenders {
-                gossip_verified_vote_sender,
-                forward_stage_sender,
-            },
-            forward_non_votes,
+            gossip_verified_vote_sender,
             sharable_banks,
             SigVerifyWorkerState::new(
                 non_vote_sender,
@@ -305,7 +299,7 @@ impl Drop for SigVerifyStage {
 impl GossipSigVerifyHandle {
     #[cfg(test)]
     pub(crate) fn new_for_tests(
-        worker_sender: Sender<crate::sigverify::GossipVerifyTask>,
+        worker_sender: crossbeam_channel::Sender<crate::sigverify::GossipVerifyTask>,
         verified_vote_receiver: Receiver<GossipVerifiedVoteBatch>,
     ) -> Self {
         Self {
@@ -358,7 +352,7 @@ mod tests {
         solana_keypair::Keypair,
         solana_message::{VersionedMessage, v1},
         solana_perf::{
-            packet::{BytesPacket, BytesPacketBatch, to_packet_batches},
+            packet::{BytesPacket, BytesPacketBatch, PacketFlags, to_packet_batches},
             test_tx::test_tx,
         },
         solana_pubkey::Pubkey,
@@ -399,15 +393,20 @@ mod tests {
 
     #[test]
     fn test_sigverify_stage_with_same_tx() {
-        test_sigverify_stage(true)
+        test_sigverify_stage(true, false)
     }
 
     #[test]
     fn test_sigverify_stage_without_same_tx() {
-        test_sigverify_stage(false)
+        test_sigverify_stage(false, false)
     }
 
-    fn test_sigverify_stage(use_same_tx: bool) {
+    #[test]
+    fn test_sigverify_stage_with_forwarded_transactions() {
+        test_sigverify_stage(false, true)
+    }
+
+    fn test_sigverify_stage(use_same_tx: bool, forwarded: bool) {
         agave_logger::setup();
         trace!("start");
         let (_bank, bank_forks) =
@@ -417,15 +416,12 @@ mod tests {
         let (vote_packet_s, vote_packet_r) = bounded(1024);
         let (verified_s, verified_r) = BankingTracer::channel_for_test();
         let (tpu_vote_s, _tpu_vote_r) = BankingTracer::channel_for_test();
-        let (forward_stage_s, _forward_stage_r) = bounded(1024);
         let (stage, gossip_sigverify_handle) = SigVerifyStage::new(
             packet_r,
             vote_packet_r,
             verified_s,
             tpu_vote_s,
-            forward_stage_s,
             NonZeroUsize::new(4).unwrap(),
-            false,
             sharable_banks,
             None,
         );
@@ -442,7 +438,12 @@ mod tests {
         );
 
         let mut sent_len = 0;
-        for batch in batches.into_iter() {
+        for mut batch in batches.into_iter() {
+            if forwarded {
+                for packet in batch.iter_mut() {
+                    packet.meta_mut().flags |= PacketFlags::FORWARDED;
+                }
+            }
             sent_len += batch.len();
             assert_eq!(batch.len(), packets_per_batch);
             packet_s.send(batch).unwrap();
@@ -452,6 +453,7 @@ mod tests {
         drop(packet_s);
         loop {
             if let Ok(verifieds) = verified_r.recv_timeout(Duration::from_secs(30)) {
+                assert!(verifieds.iter().all(|p| p.meta().forwarded() == forwarded));
                 valid_received += verifieds.iter().filter(|p| !p.meta().discard()).count();
             } else {
                 break;
@@ -483,15 +485,12 @@ mod tests {
         let (vote_packet_s, vote_packet_r) = bounded(1024);
         let (verified_s, verified_r) = BankingTracer::channel_for_test();
         let (tpu_vote_s, _tpu_vote_r) = BankingTracer::channel_for_test();
-        let (forward_stage_s, _forward_stage_r) = bounded(1024);
         let (stage, gossip_sigverify_handle) = SigVerifyStage::new(
             packet_r,
             vote_packet_r,
             verified_s,
             tpu_vote_s,
-            forward_stage_s,
             NonZeroUsize::new(1).unwrap(),
-            false,
             sharable_banks,
             None,
         );

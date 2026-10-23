@@ -8,8 +8,7 @@ use {
 };
 use {
     crate::{
-        admin_rpc_service::{self, StakedNodesOverrides, load_staked_nodes_overrides},
-        bootstrap,
+        admin_rpc_service, bootstrap,
         cli::{self},
         commands::{
             FromClapArgMatches,
@@ -313,24 +312,6 @@ pub fn execute(
         .unwrap_or_else(|| vec![Arc::new(keypair_of(matches, "identity").expect("identity"))]);
     let authorized_voter_keypairs = Arc::new(RwLock::new(authorized_voter_keypairs));
 
-    let staked_nodes_overrides_path = matches
-        .value_of("staked_nodes_overrides")
-        .map(str::to_string);
-    let staked_nodes_overrides = Arc::new(RwLock::new(
-        match &staked_nodes_overrides_path {
-            None => StakedNodesOverrides::default(),
-            Some(p) => load_staked_nodes_overrides(p).unwrap_or_else(|err| {
-                error!("Failed to load stake-nodes-overrides from {p}: {err}");
-                clap::Error::with_description(
-                    "Failed to load configuration of stake-nodes-overrides argument",
-                    clap::ErrorKind::InvalidValue,
-                )
-                .exit()
-            }),
-        }
-        .staked_map_id,
-    ));
-
     let init_complete_file = matches.value_of("init_complete_file");
 
     let private_rpc = matches.is_present("private_rpc");
@@ -554,7 +535,6 @@ pub fn execute(
         snapshot_config,
         no_wait_for_vote_to_start_leader: matches.is_present("no_wait_for_vote_to_start_leader"),
         wait_to_vote_slot: value_t!(matches, "wait_to_vote_slot", Slot).ok(),
-        staked_nodes_overrides: staked_nodes_overrides.clone(),
         use_snapshot_archives_at_startup,
         ip_echo_server_threads,
         rayon_global_threads,
@@ -591,7 +571,6 @@ pub fn execute(
                 SchedulerPacing
             ),
         },
-        enable_block_production_forwarding: staked_nodes_overrides_path.is_some(),
         enable_scheduler_bindings: matches.is_present("enable_scheduler_bindings"),
         banking_trace_dir_byte_limit: value_t_or_exit!(
             matches,
@@ -673,7 +652,6 @@ pub fn execute(
             post_init: admin_service_post_init.clone(),
             tower_storage: validator_config.tower_storage.clone(),
             vote_history_storage: validator_config.vote_history_storage.clone(),
-            staked_nodes_overrides,
             rpc_to_plugin_manager_sender,
         },
     );

@@ -517,9 +517,7 @@ mod tests {
         stakes.insert(server_keypair.pubkey(), stake_amount);
         stakes.insert(client_keypair.pubkey(), stake_amount);
 
-        let overrides: HashMap<Pubkey, u64> = HashMap::new();
-
-        Arc::new(RwLock::new(StakedNodes::new(Arc::new(stakes), overrides)))
+        Arc::new(RwLock::new(StakedNodes::new(Arc::new(stakes))))
     }
 
     #[tokio::test]
@@ -927,8 +925,7 @@ mod tests {
         // client 2 has higher stake so that it can prune client 1
         stakes.insert(client_keypair2.pubkey(), stake_amount * 2);
 
-        let overrides: HashMap<Pubkey, u64> = HashMap::new();
-        let staked_nodes = Arc::new(RwLock::new(StakedNodes::new(Arc::new(stakes), overrides)));
+        let staked_nodes = Arc::new(RwLock::new(StakedNodes::new(Arc::new(stakes))));
 
         let simple_qos = SimpleQos::new(
             SimpleQosConfig {
@@ -997,8 +994,7 @@ mod tests {
         stakes.insert(server_keypair2.pubkey(), low_stake);
         stakes.insert(client_keypair2.pubkey(), low_stake);
 
-        let overrides: HashMap<Pubkey, u64> = HashMap::new();
-        let staked_nodes = Arc::new(RwLock::new(StakedNodes::new(Arc::new(stakes), overrides)));
+        let staked_nodes = Arc::new(RwLock::new(StakedNodes::new(Arc::new(stakes))));
 
         let simple_qos = SimpleQos::new(
             SimpleQosConfig {

@@ -39,8 +39,8 @@ fn parse_duration(arg: &str) -> Result<std::time::Duration, std::num::ParseFloat
 }
 const LAMPORTS_PER_SOL: u64 = 1000000000;
 
-pub fn load_staked_nodes_overrides(path: &String) -> anyhow::Result<HashMap<Pubkey, u64>> {
-    debug!("Loading staked nodes overrides configuration from {path}");
+pub fn load_stakes(path: &String) -> anyhow::Result<HashMap<Pubkey, u64>> {
+    debug!("Loading stakes from {path}");
     if Path::new(&path).exists() {
         let file = std::fs::File::open(path)?;
         let reader = BufReader::new(file);
@@ -62,7 +62,7 @@ pub fn load_staked_nodes_overrides(path: &String) -> anyhow::Result<HashMap<Pubk
         }
         Ok(map)
     } else {
-        anyhow::bail!("Staked nodes overrides provided '{path}' a non-existing file path.")
+        anyhow::bail!("Stake file '{path}' does not exist.")
     }
 }
 
@@ -102,10 +102,7 @@ async fn main() -> anyhow::Result<()> {
     let keypair = Keypair::new();
 
     let staked_nodes = {
-        let nodes = StakedNodes::new(
-            Arc::new(HashMap::new()),
-            load_staked_nodes_overrides(&cli.stake_amounts)?,
-        );
+        let nodes = StakedNodes::new(Arc::new(load_stakes(&cli.stake_amounts)?));
         Arc::new(RwLock::new(nodes))
     };
 

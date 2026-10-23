@@ -11,7 +11,7 @@ use {
         RequestContext, ServerBuilder, tokio::sync::oneshot::channel as oneshot_channel,
     },
     log::*,
-    serde::{Deserialize, Serialize, de::Deserializer},
+    serde::{Deserialize, Serialize},
     solana_clock::{Epoch, Slot},
     solana_core::{
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
@@ -36,7 +36,7 @@ use {
     solana_validator_exit::Exit,
     std::{
         collections::{HashMap, HashSet},
-        env, error,
+        env,
         fmt::{self, Display},
         net::{IpAddr, SocketAddr},
         num::NonZeroUsize,
@@ -61,7 +61,6 @@ pub struct AdminRpcRequestMetadata {
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
     pub tower_storage: Arc<dyn TowerStorage>,
     pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
-    pub staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
     pub post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
     pub rpc_to_plugin_manager_sender: Option<Sender<GeyserPluginManagerRequest>>,
 }
@@ -254,9 +253,6 @@ pub trait AdminRpc {
         require_tower: bool,
         require_vote_history: bool,
     ) -> Result<()>;
-
-    #[rpc(meta, name = "setStakedNodesOverrides")]
-    fn set_staked_nodes_overrides(&self, meta: Self::Metadata, path: String) -> Result<()>;
 
     #[rpc(meta, name = "contactInfo")]
     fn contact_info(&self, meta: Self::Metadata) -> Result<AdminRpcContactInfo>;
@@ -637,21 +633,6 @@ impl AdminRpc for AdminRpcImpl {
             require_tower,
             require_vote_history,
         )
-    }
-
-    fn set_staked_nodes_overrides(&self, meta: Self::Metadata, path: String) -> Result<()> {
-        let loaded_config = load_staked_nodes_overrides(&path)
-            .map_err(|err| {
-                error!("Failed to load staked nodes overrides from {path}: {err}");
-                jsonrpc_core::error::Error::internal_error()
-            })?
-            .staked_map_id;
-        let mut write_staked_nodes = meta.staked_nodes_overrides.write().unwrap();
-        write_staked_nodes.clear();
-        write_staked_nodes.extend(loaded_config);
-        info!("Staked nodes overrides loaded from {path}");
-        debug!("overrides map: {write_staked_nodes:?}");
-        Ok(())
     }
 
     fn contact_info(&self, meta: Self::Metadata) -> Result<AdminRpcContactInfo> {
@@ -1165,38 +1146,6 @@ pub fn runtime() -> Runtime {
         .expect("new tokio runtime")
 }
 
-#[derive(Default, Deserialize, Clone)]
-pub struct StakedNodesOverrides {
-    #[serde(deserialize_with = "deserialize_pubkey_map")]
-    pub staked_map_id: HashMap<Pubkey, u64>,
-}
-
-pub fn deserialize_pubkey_map<'de, D>(des: D) -> std::result::Result<HashMap<Pubkey, u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let container: HashMap<String, u64> = serde::Deserialize::deserialize(des)?;
-    let mut container_typed: HashMap<Pubkey, u64> = HashMap::new();
-    for (key, value) in container.iter() {
-        let typed_key = Pubkey::try_from(key.as_str())
-            .map_err(|_| serde::de::Error::invalid_type(serde::de::Unexpected::Map, &"PubKey"))?;
-        container_typed.insert(typed_key, *value);
-    }
-    Ok(container_typed)
-}
-
-pub fn load_staked_nodes_overrides(
-    path: &String,
-) -> std::result::Result<StakedNodesOverrides, Box<dyn error::Error>> {
-    debug!("Loading staked nodes overrides configuration from {path}");
-    if Path::new(&path).exists() {
-        let file = std::fs::File::open(path)?;
-        Ok(serde_yaml::from_reader(file)?)
-    } else {
-        Err(format!("Staked nodes overrides provided '{path}' a non-existing file path.").into())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use {
@@ -1316,7 +1265,6 @@ mod tests {
                     blockstore,
                     votor_event_sender,
                 }))),
-                staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
                 rpc_to_plugin_manager_sender: None,
             };
             let mut io = MetaIoHandler::default();
@@ -1515,7 +1463,6 @@ mod tests {
                     agave_votor::vote_history_storage::NullVoteHistoryStorage::default(),
                 ),
                 post_init: post_init.clone(),
-                staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
                 rpc_to_plugin_manager_sender: None,
             };
 
@@ -1552,7 +1499,6 @@ mod tests {
                     KeyUpdaterType::Tpu,
                     KeyUpdaterType::TpuForwards,
                     KeyUpdaterType::TpuVote,
-                    KeyUpdaterType::Forward,
                     KeyUpdaterType::RpcService,
                     KeyUpdaterType::Votor,
                     KeyUpdaterType::VotorPeerListService,
@@ -1603,7 +1549,6 @@ mod tests {
                 agave_votor::vote_history_storage::NullVoteHistoryStorage::default(),
             ),
             post_init: post_init.clone(),
-            staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
             rpc_to_plugin_manager_sender: None,
         };
 
@@ -1699,7 +1644,6 @@ mod tests {
                 agave_votor::vote_history_storage::NullVoteHistoryStorage::default(),
             ),
             post_init: Arc::new(RwLock::new(None)),
-            staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
             rpc_to_plugin_manager_sender: None,
         };
 

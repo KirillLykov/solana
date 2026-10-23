@@ -1,9 +1,7 @@
 use {
-    solana_pubkey::Pubkey,
     solana_runtime::bank_forks::BankForks,
     solana_streamer::streamer::StakedNodes,
     std::{
-        collections::HashMap,
         sync::{
             Arc, RwLock,
             atomic::{AtomicBool, Ordering},
@@ -24,7 +22,6 @@ impl StakedNodesUpdaterService {
         exit: Arc<AtomicBool>,
         bank_forks: Arc<RwLock<BankForks>>,
         staked_nodes: Arc<RwLock<StakedNodes>>,
-        staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
     ) -> Self {
         let thread_hdl = Builder::new()
             .name("solStakedNodeUd".to_string())
@@ -34,8 +31,7 @@ impl StakedNodesUpdaterService {
                         let root_bank = bank_forks.read().unwrap().root_bank();
                         root_bank.current_epoch_staked_nodes()
                     };
-                    let overrides = staked_nodes_overrides.read().unwrap().clone();
-                    *staked_nodes.write().unwrap() = StakedNodes::new(stakes, overrides);
+                    *staked_nodes.write().unwrap() = StakedNodes::new(stakes);
                     std::thread::sleep(STAKE_REFRESH_CYCLE);
                 }
             })

@@ -78,15 +78,12 @@ fn bench_sigverify_stage(bencher: &mut Bencher, use_same_tx: bool) {
     let (vote_packet_s, vote_packet_r) = bounded(1024);
     let (verified_s, verified_r) = BankingTracer::channel_for_test();
     let (tpu_vote_s, _tpu_vote_r) = BankingTracer::channel_for_test();
-    let (forward_stage_s, _forward_stage_r) = bounded(1024);
     let (stage, gossip_sigverify_handle) = SigVerifyStage::new(
         packet_r,
         vote_packet_r,
         verified_s,
         tpu_vote_s,
-        forward_stage_s,
         NonZeroUsize::new(sigverify::threadpool_for_benches().current_num_threads()).unwrap(),
-        false,
         sharable_banks,
         None,
     );

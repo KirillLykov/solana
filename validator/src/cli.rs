@@ -72,7 +72,6 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
         .subcommand(commands::set_identity::command())
         .subcommand(commands::set_event_filter::command())
         .subcommand(commands::set_log_filter::command())
-        .subcommand(commands::staked_nodes_overrides::command())
         .subcommand(commands::wait_for_restart_window::command())
         .subcommand(commands::set_public_address::command())
         .subcommand(commands::manage_block_production::command(default_args))
@@ -974,6 +973,28 @@ impl Default for DefaultTestArgs {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_stake_overrides_removed() {
+        let default_args = DefaultArgs::default();
+        for args in [
+            vec!["agave-validator", "--staked-nodes-overrides", "stakes.yaml"],
+            vec!["agave-validator", "staked-nodes-overrides", "stakes.yaml"],
+        ] {
+            let error = app("test", &default_args)
+                .get_matches_from_safe(args)
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error.kind,
+                    clap::ErrorKind::UnknownArgument
+                        | clap::ErrorKind::InvalidSubcommand
+                        | clap::ErrorKind::UnrecognizedSubcommand
+                ),
+                "unexpected CLI error: {error:?}"
+            );
+        }
+    }
 
     #[test]
     fn make_sure_deprecated_arguments_are_sorted_alphabetically() {

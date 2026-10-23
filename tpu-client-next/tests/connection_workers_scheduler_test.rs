@@ -5,7 +5,6 @@ use {
     solana_net_utils::sockets::{
         bind_to, localhost_port_range_for_tests, unique_port_range_for_tests,
     },
-    solana_pubkey::Pubkey,
     solana_signer::Signer,
     solana_streamer::{
         nonblocking::{
@@ -426,7 +425,7 @@ async fn test_connection_pruned_and_reopened() {
 async fn test_staked_connection() {
     let stake_identity = Keypair::new();
     let stakes = HashMap::from([(stake_identity.pubkey(), 100_000)]);
-    let staked_nodes = StakedNodes::new(Arc::new(stakes), HashMap::<Pubkey, u64>::default());
+    let staked_nodes = StakedNodes::new(Arc::new(stakes));
 
     let SpawnTestServerResult {
         join_handle: server_handle,
@@ -754,7 +753,7 @@ async fn test_rate_limiting_establish_connection() {
 async fn test_update_identity() {
     let stake_identity = Keypair::new();
     let stakes = HashMap::from([(stake_identity.pubkey(), 100_000)]);
-    let staked_nodes = StakedNodes::new(Arc::new(stakes), HashMap::<Pubkey, u64>::default());
+    let staked_nodes = StakedNodes::new(Arc::new(stakes));
 
     let SpawnTestServerResult {
         join_handle: server_handle,

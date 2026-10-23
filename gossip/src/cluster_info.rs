@@ -2476,10 +2476,6 @@ pub struct Sockets {
     // and receiving BlockIdRepairResponse from the cluster.
     pub block_id_repair: UdpSocket,
 
-    /// Client-side socket for ForwardingStage vote transactions
-    pub tpu_vote_forwarding_client: UdpSocket, // udp write only
-    /// Client-side socket for ForwardingStage non-vote transactions
-    pub tpu_transaction_forwarding_clients: Box<[UdpSocket]>, // quic write only
     /// UDP sockets for the alpenglow votor QUIC server endpoints.
     pub votor_server: Vec<UdpSocket>, // quic read only
     /// Connection cache endpoint for QUIC-based Vote

@@ -1555,10 +1555,7 @@ pub mod test {
 
         let client_keypair = Keypair::new();
         let stakes = HashMap::from([(client_keypair.pubkey(), 100_000)]);
-        let staked_nodes = StakedNodes::new(
-            Arc::new(stakes),
-            HashMap::<Pubkey, u64>::default(), // overrides
-        );
+        let staked_nodes = StakedNodes::new(Arc::new(stakes));
         let SpawnTestServerResult {
             join_handle,
             receiver,
@@ -1591,10 +1588,8 @@ pub mod test {
         let client_keypair = Keypair::new();
         let initial_stake = 100_000;
         let set_stake = |staked_nodes: &RwLock<StakedNodes>, stake: u64| {
-            *staked_nodes.write().unwrap() = StakedNodes::new(
-                Arc::new(HashMap::from([(client_keypair.pubkey(), stake)])),
-                HashMap::default(),
-            );
+            *staked_nodes.write().unwrap() =
+                StakedNodes::new(Arc::new(HashMap::from([(client_keypair.pubkey(), stake)])));
         };
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
         set_stake(&staked_nodes, initial_stake);
@@ -1670,10 +1665,7 @@ pub mod test {
 
         let client_keypair = Keypair::new();
         let stakes = HashMap::from([(client_keypair.pubkey(), 0)]);
-        let staked_nodes = StakedNodes::new(
-            Arc::new(stakes),
-            HashMap::<Pubkey, u64>::default(), // overrides
-        );
+        let staked_nodes = StakedNodes::new(Arc::new(stakes));
         let SpawnTestServerResult {
             join_handle,
             receiver,

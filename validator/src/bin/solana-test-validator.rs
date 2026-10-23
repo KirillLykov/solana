@@ -457,7 +457,6 @@ fn main() {
             validator_exit: genesis.validator_exit.clone(),
             validator_exit_backpressure: HashMap::default(),
             authorized_voter_keypairs: genesis.authorized_voter_keypairs.clone(),
-            staked_nodes_overrides: genesis.staked_nodes_overrides.clone(),
             post_init: admin_service_post_init,
             tower_storage: tower_storage.clone(),
             vote_history_storage: vote_history_storage.clone(),
