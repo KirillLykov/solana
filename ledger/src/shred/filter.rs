@@ -9,12 +9,12 @@ use {
     },
     crate::blockstore,
     agave_feature_set as feature_set,
+    crossbeam_channel::Sender,
     solana_clock::Slot,
     solana_epoch_schedule::EpochSchedule,
     solana_perf::packet::BytesPacket,
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
-    solana_streamer::{evicting_sender::EvictingSender, streamer::ChannelSend},
     std::{
         sync::{
             Arc,
@@ -515,14 +515,14 @@ fn check_last_data_shred_index(index: u32) -> bool {
 /// Holds the context to perform filtering on shred recovery
 pub struct ShredRecoveryContext {
     /// Sender to retransmit the recovered shreds
-    retransmit_sender: EvictingSender<Vec<Payload>>,
+    retransmit_sender: Sender<Vec<Payload>>,
     /// Used for filtering recovered shreds
     shred_filter_ctx: ShredFilterContext,
 }
 
 impl ShredRecoveryContext {
     pub fn new(
-        retransmit_sender: EvictingSender<Vec<Payload>>,
+        retransmit_sender: Sender<Vec<Payload>>,
         root_bank: Arc<Bank>,
         shred_version: u16,
     ) -> Self {
@@ -657,6 +657,7 @@ mod tests {
             shred::{MAX_CODE_SHREDS_PER_SLOT, tests::*},
         },
         assert_matches::assert_matches,
+        crossbeam_channel::bounded,
         itertools::Itertools,
         solana_clock::DEFAULT_NS_PER_TICK_400_MS,
         solana_leader_schedule::SlotLeader,
@@ -900,7 +901,7 @@ mod tests {
         // Feed recovery only coding shreds. Without the custom limit below, this
         // is enough parity to recover the missing data shreds.
         let max_code_shreds_per_slot = coding_shreds[0].index();
-        let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
+        let (dummy_retransmit_sender, _) = bounded(0);
         let mut shred_recovery_context =
             ShredRecoveryContext::new(dummy_retransmit_sender, new_test_bank(0), shred_version);
         shred_recovery_context
