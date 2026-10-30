@@ -192,6 +192,7 @@ sysctl = { workspace = true }
 
 [dev-dependencies]
 agave-reserved-account-keys = { path = "../reserved-account-keys", features = ["agave-unstable-api"] }
+agave-worker-pool = { workspace = true }
 bencher = { workspace = true }
 bitvec = { workspace = true }
 criterion = { workspace = true }

@@ -27,7 +27,6 @@ use {
     },
     solana_signature::Signature,
     solana_signer::Signer,
-    solana_streamer::streamer::ChannelSend,
     std::{
         num::NonZeroUsize,
         sync::{Arc, RwLock},
@@ -451,7 +450,9 @@ fn run_shred_sigverify(
                 crossbeam_channel::TrySendError::Full(shreds) => {
                     stats.num_retransmit_stage_overflow_shreds += shreds.len();
                 }
-                _ => unreachable!("EvictingSender holds on to both ends of the channel"),
+                crossbeam_channel::TrySendError::Disconnected(_) => {
+                    return Err(ShredSigverifyError::SendError);
+                }
             }
         }
     }

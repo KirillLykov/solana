@@ -6,10 +6,10 @@ use {
         cluster_nodes::{
             ClusterNodes, ClusterNodesCache, DATA_PLANE_FANOUT, Error, MAX_NUM_TURBINE_HOPS,
         },
-        retransmit_stage::worker_pool::WorkerPool,
     },
     agave_votor::event::VotorEvent,
     agave_votor_messages::migration::MigrationStatus,
+    agave_worker_pool::{WorkerPool, WorkerPoolConfig},
     crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender, TrySendError},
     lru::LruCache,
     rand::Rng,
@@ -37,6 +37,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         net::{SocketAddr, UdpSocket},
+        num::NonZeroUsize,
         ops::AddAssign,
         sync::{Arc, RwLock, atomic::Ordering},
         thread::{self, Builder, JoinHandle},
@@ -44,7 +45,6 @@ use {
     },
 };
 
-mod worker_pool;
 pub use solana_ledger::shred::filter::{RetransmitSender, ShredBatch};
 
 const MAX_DUPLICATE_COUNT: usize = 2;
@@ -487,7 +487,6 @@ fn get_retransmit_addrs(
 /// Service to retransmit messages received from other peers in turbine.
 pub struct RetransmitStage {
     stats_handle: JoinHandle<()>,
-    thread_pool: WorkerPool,
 }
 
 impl RetransmitStage {
@@ -500,7 +499,8 @@ impl RetransmitStage {
     /// * `leader_schedule_cache` - The leader schedule to verify shreds
     /// * `cluster_info` - This structure needs to be updated and populated by the bank and via gossip.
     ///
-    ///  Returns a sender for submitting shred batches and a stage handle for joining the threads.
+    /// Returns the shared worker pool for submitting shred batches and a handle for joining stats.
+    /// Dropping the last pool owner drains queued batches and joins the workers.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         bank_forks: Arc<RwLock<BankForks>>,
@@ -521,8 +521,9 @@ impl RetransmitStage {
         let mut rng = rand::rng();
         let shred_deduper = Arc::new(ShredDeduper::new(&mut rng, DEDUPER_NUM_BITS));
 
-        let num_workers = retransmit_sockets.len();
-        let (stats_sender, stats_receiver) = crossbeam_channel::bounded(num_workers);
+        let num_workers = NonZeroUsize::new(retransmit_sockets.len())
+            .expect("retransmit requires at least one socket");
+        let (stats_sender, stats_receiver) = crossbeam_channel::bounded(num_workers.get());
         let is_xdp = xdp_sender.is_some();
         let context = Arc::new(WorkerContext {
             bank_forks: bank_forks.clone(),
@@ -535,17 +536,18 @@ impl RetransmitStage {
             max_slots,
             stats_sender,
         });
-        let run_batch = {
-            let context = Arc::clone(&context);
-            move |shreds, worker_index| retransmit_batch(shreds, worker_index, context.as_ref())
-        };
-
         // Match workers to retransmit sockets to preserve socket affinity.
-        let (retransmit_sender, thread_pool) = WorkerPool::build(
-            "solRetransmit",
-            num_workers,
-            CHANNEL_SIZE_RETRANSMIT_INGRESS,
-            run_batch,
+        let config = WorkerPoolConfig {
+            job_queue_capacity: NonZeroUsize::new(CHANNEL_SIZE_RETRANSMIT_INGRESS).unwrap(),
+            stack_size: Some(2 * 1024 * 1024),
+            ..WorkerPoolConfig::new("solRetransmit", num_workers)
+        };
+        let retransmit_sender = Arc::new(
+            WorkerPool::spawn(config, |worker_index| {
+                let context = Arc::clone(&context);
+                move |shreds| retransmit_batch(shreds, worker_index, context.as_ref())
+            })
+            .expect("failed to spawn retransmit worker thread"),
         );
 
         let stats_thread_context = StatsThreadContext {
@@ -567,26 +569,12 @@ impl RetransmitStage {
             .spawn(move || process_stats_update(stats_thread_context, stats_receiver))
             .unwrap();
 
-        (
-            retransmit_sender,
-            Self {
-                stats_handle,
-                thread_pool,
-            },
-        )
+        (retransmit_sender, Self { stats_handle })
     }
 
+    /// Waits for stats to finish after all producer-owned pool handles have been dropped.
     pub fn join(self) -> thread::Result<()> {
-        let Self {
-            stats_handle,
-            thread_pool,
-        } = self;
-
-        let stats_handle = stats_handle.join();
-        let worker_pool_result = thread_pool.join();
-
-        stats_handle?;
-        worker_pool_result
+        self.stats_handle.join()
     }
 }
 
@@ -856,10 +844,15 @@ mod tests {
         rand::SeedableRng,
         rand_chacha::ChaChaRng,
         solana_entry::entry::create_ticks,
+        solana_gossip::contact_info::ContactInfo,
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_leader_schedule::NUM_CONSECUTIVE_LEADER_SLOTS,
-        solana_ledger::shred::{ProcessShredsStats, Shredder},
+        solana_ledger::{
+            genesis_utils::create_genesis_config_with_leader,
+            shred::{ProcessShredsStats, Shredder},
+        },
+        solana_signer::Signer,
     };
 
     fn get_keypair() -> Keypair {

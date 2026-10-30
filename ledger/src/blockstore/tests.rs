@@ -13,6 +13,7 @@ use {
         },
     },
     agave_votor_messages::consensus_message::BlockId,
+    agave_worker_pool::{WorkerPool, WorkerPoolConfig},
     assert_matches::assert_matches,
     rand::{Rng, rng, seq::SliceRandom},
     rand_chacha::{ChaChaRng, rand_core::SeedableRng},
@@ -28,12 +29,11 @@ use {
     solana_sha256_hasher::hash,
     solana_shred_version::version_from_hash,
     solana_signature::Signature,
-    solana_streamer::evicting_sender::EvictingSender,
     solana_transaction::Transaction,
     solana_transaction_context::transaction::TransactionReturnData,
     solana_transaction_error::TransactionError,
     solana_transaction_status::{InnerInstruction, InnerInstructions},
-    std::{borrow::Cow, cmp::Ordering, time::Duration},
+    std::{borrow::Cow, cmp::Ordering, num::NonZeroUsize, time::Duration},
     test_case::{test_case, test_matrix},
 };
 
@@ -4925,8 +4925,8 @@ fn test_recovery() {
     let root_bank = Arc::new(Bank::new_for_tests(&genesis_config));
     let mut metrics = BlockstoreInsertionMetrics::default();
 
-    let (sender, receiver) = agave_wake_channel::bounded(1);
-    let dummy_retransmit_sender = EvictingSender::new(sender, receiver);
+    let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+    let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
     let coding_shreds = coding_shreds.into_iter().map(|shred| {
         (
             Cow::Owned(shred),
@@ -5002,8 +5002,8 @@ fn test_skip_alt_recovery() {
 
     let genesis_config = create_genesis_config(2).genesis_config;
     let root_bank = Arc::new(Bank::new_for_tests(&genesis_config));
-    let (sender, receiver) = agave_wake_channel::bounded(1);
-    let dummy_retransmit_sender = EvictingSender::new(sender, receiver);
+    let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+    let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
     let alternate_location = BlockLocation::Alternate {
         block_id: Hash::new_unique(),
     };
@@ -5108,8 +5108,8 @@ fn test_recovery_discards_unexpected_data_complete_shreds() {
             )
         })
         .collect();
-    let (sender, receiver) = agave_wake_channel::bounded(1);
-    let dummy_retransmit_sender = EvictingSender::new(sender, receiver);
+    let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+    let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
     let mut metrics = BlockstoreInsertionMetrics::default();
     blockstore
         .do_insert_shreds(

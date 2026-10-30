@@ -1,5 +1,6 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
+    agave_worker_pool::{WorkerPool, WorkerPoolConfig},
     solana_clock::Slot,
     solana_entry::entry::Entry,
     solana_epoch_schedule::{EpochSchedule, MINIMUM_SLOTS_PER_EPOCH},
@@ -15,11 +16,11 @@ use {
     },
     solana_runtime::bank::Bank,
     solana_signer::Signer,
-    solana_streamer::evicting_sender::EvictingSender,
     solana_system_transaction as system_transaction,
     std::{
         collections::{BTreeMap, HashSet},
         convert::TryInto,
+        num::NonZeroUsize,
         sync::Arc,
     },
     test_case::test_case,
@@ -42,8 +43,8 @@ fn new_shred_recovery_context(shreds: &[Shred]) -> ShredRecoveryContext {
         SlotLeader::default(),
         warp_slot,
     ));
-    let (sender, receiver) = agave_wake_channel::bounded(1);
-    let dummy_retransmit_sender = EvictingSender::new(sender, receiver);
+    let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+    let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
     ShredRecoveryContext::new(
         dummy_retransmit_sender,
         root_bank,

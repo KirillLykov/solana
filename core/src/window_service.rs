@@ -451,6 +451,7 @@ impl WindowService {
 mod test {
     use {
         super::*,
+        agave_worker_pool::{WorkerPool, WorkerPoolConfig},
         crossbeam_channel::bounded,
         rand::Rng,
         solana_entry::entry::{Entry, create_ticks},
@@ -473,6 +474,7 @@ mod test {
         },
         solana_signer::Signer,
         solana_time_utils::timestamp,
+        std::num::NonZeroUsize,
     };
 
     fn local_entries_to_shred(
@@ -583,8 +585,8 @@ mod test {
             .insert_shreds(vec![original_shred.clone()], false)
             .unwrap();
 
-        let (retransmit_sender, retransmit_receiver) = agave_wake_channel::bounded(1);
-        let dummy_retransmit_sender = RetransmitSender::new(retransmit_sender, retransmit_receiver);
+        let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+        let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
         let is_trusted = false;
         blockstore
             .insert_shreds_handle_duplicate(
@@ -672,8 +674,8 @@ mod test {
             let shreds = [&original_shred, &duplicate_shred]
                 .into_iter()
                 .map(|shred| (Cow::Borrowed(shred), /*is_repaired:*/ false));
-            let (sender, receiver) = agave_wake_channel::bounded(1);
-            let dummy_retransmit_sender = RetransmitSender::new(sender, receiver);
+            let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+            let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
             blockstore
                 .insert_shreds_handle_duplicate(
                     shreds,

@@ -10,7 +10,7 @@
 #![cfg(feature = "agave-unstable-api")]
 
 use {
-    agave_wake_channel::{Sender, bounded},
+    agave_wake_channel::{Sender, TrySendError, bounded},
     std::{
         io,
         num::NonZeroUsize,
@@ -148,6 +148,13 @@ impl<J> WorkerPool<J> {
             .expect("worker threads exited unexpectedly");
     }
 
+    /// Queues `job` without blocking.
+    ///
+    /// Returns the job if the queue is full or every worker has exited.
+    pub fn try_send(&self, job: J) -> Result<(), TrySendError<J>> {
+        self.job_sender.try_send(job)
+    }
+
     pub fn num_workers(&self) -> usize {
         self.workers.0.len()
     }
@@ -195,7 +202,11 @@ impl Drop for Workers {
 mod tests {
     use {
         super::*,
-        std::{collections::HashSet, hint::black_box, sync::mpsc},
+        std::{
+            collections::HashSet,
+            hint::black_box,
+            sync::{Arc, Barrier, mpsc},
+        },
     };
 
     const NUM_WORKERS: NonZeroUsize = NonZeroUsize::new(4).unwrap();
@@ -247,6 +258,48 @@ mod tests {
         for (_, worker_id, thread_name) in results {
             assert_eq!(thread_name, Some(format!("solTestPool{worker_id}")));
         }
+    }
+
+    #[test]
+    fn test_shared_worker_pool_try_send_and_drop() {
+        let started = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let (result_sender, result_receiver) = mpsc::channel();
+        let config = WorkerPoolConfig::new("solTestPool", NonZeroUsize::MIN);
+        let pool = Arc::new(
+            WorkerPool::spawn(config, |_| {
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                let result_sender = result_sender.clone();
+                move |job: usize| {
+                    if job == 0 {
+                        started.wait();
+                        release.wait();
+                    }
+                    result_sender.send(job).unwrap();
+                }
+            })
+            .unwrap(),
+        );
+        drop(result_sender);
+        let producer = Arc::clone(&pool);
+        pool.try_send(0).unwrap();
+        started.wait();
+        drop(pool);
+        producer.try_send(1).unwrap();
+        assert_eq!(producer.try_send(2), Err(TrySendError::Full(2)));
+        release.wait();
+        drop(producer);
+        assert_eq!(result_receiver.into_iter().collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn test_worker_pool_try_send_reports_disconnection() {
+        let config = WorkerPoolConfig::new("solTestPool", NonZeroUsize::MIN);
+        let mut pool = WorkerPool::spawn(config, |_| panic_job).unwrap();
+        pool.try_send(()).unwrap();
+        assert!(pool.workers.join().is_err());
+        assert_eq!(pool.try_send(()), Err(TrySendError::Disconnected(())));
     }
 
     #[test]

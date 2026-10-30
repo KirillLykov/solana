@@ -9,14 +9,13 @@ use {
     },
     crate::blockstore,
     agave_feature_set as feature_set,
-    agave_wake_channel::{Receiver, Sender},
+    agave_worker_pool::WorkerPool,
     itertools::Itertools,
     solana_clock::Slot,
     solana_epoch_schedule::EpochSchedule,
     solana_perf::packet::BytesPacket,
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
-    solana_streamer::{evicting_sender::EvictingSender, streamer::ChannelSend},
     std::{
         sync::{
             Arc,
@@ -512,7 +511,8 @@ fn check_last_data_shred_index(index: u32) -> bool {
 pub const RETRANSMIT_SHRED_BATCH_SIZE: usize = 16;
 
 pub type ShredBatch = Vec<Payload>;
-pub type RetransmitSender = EvictingSender<ShredBatch, Sender<ShredBatch>, Receiver<ShredBatch>>;
+/// Shared retransmit pool. Its last owner drains queued jobs and joins the workers.
+pub type RetransmitSender = Arc<WorkerPool<ShredBatch>>;
 
 /// Holds the context to perform filtering on shred recovery
 pub struct ShredRecoveryContext {
@@ -661,6 +661,7 @@ mod tests {
             genesis_utils::create_genesis_config,
             shred::{MAX_CODE_SHREDS_PER_SLOT, tests::*},
         },
+        agave_worker_pool::WorkerPoolConfig,
         assert_matches::assert_matches,
         itertools::Itertools,
         solana_clock::DEFAULT_NS_PER_TICK_400_MS,
@@ -672,6 +673,7 @@ mod tests {
         },
         std::{
             io::{Cursor, Seek, SeekFrom, Write},
+            num::NonZeroUsize,
             sync::Arc,
             time::Duration,
         },
@@ -905,8 +907,8 @@ mod tests {
         // Feed recovery only coding shreds. Without the custom limit below, this
         // is enough parity to recover the missing data shreds.
         let max_code_shreds_per_slot = coding_shreds[0].index();
-        let (sender, receiver) = agave_wake_channel::bounded(1);
-        let dummy_retransmit_sender = RetransmitSender::new(sender, receiver);
+        let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+        let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
         let mut shred_recovery_context =
             ShredRecoveryContext::new(dummy_retransmit_sender, new_test_bank(0), shred_version);
         shred_recovery_context
