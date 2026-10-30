@@ -21,7 +21,10 @@ use {
         blockstore::{Blockstore, BlockstoreInsertionMetrics, PossibleDuplicateShred},
         blockstore_db::{DBPinnableSlice, WriteBatch},
         blockstore_meta::BlockLocation,
-        shred::{self, Shred, filter::ShredRecoveryContext},
+        shred::{
+            self, Shred,
+            filter::{RetransmitSender, ShredRecoveryContext},
+        },
     },
     solana_measure::measure::Measure,
     solana_net_utils::PinnedXdpSender,
@@ -208,7 +211,7 @@ where
 
 pub struct WindowServiceChannels {
     pub verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
-    pub retransmit_sender: Sender<Vec<shred::Payload>>,
+    pub retransmit_sender: RetransmitSender,
     pub completed_data_sets_sender: Option<CompletedDataSetsSender>,
     pub duplicate_slots_sender: DuplicateSlotSender,
     pub repair_service_channels: RepairServiceChannels,
@@ -218,7 +221,7 @@ pub struct WindowServiceChannels {
 impl WindowServiceChannels {
     pub fn new(
         verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
-        retransmit_sender: Sender<Vec<shred::Payload>>,
+        retransmit_sender: RetransmitSender,
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
         duplicate_slots_sender: DuplicateSlotSender,
         repair_service_channels: RepairServiceChannels,
@@ -355,7 +358,7 @@ impl WindowService {
         verified_receiver: Receiver<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
         check_duplicate_sender: Sender<PossibleDuplicateShred>,
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
-        retransmit_sender: Sender<Vec<shred::Payload>>,
+        retransmit_sender: RetransmitSender,
     ) -> JoinHandle<()> {
         Builder::new()
             .name("solWinInsert".to_string())
@@ -450,6 +453,7 @@ impl WindowService {
 mod test {
     use {
         super::*,
+        agave_worker_pool::{WorkerPool, WorkerPoolConfig},
         crossbeam_channel::bounded,
         rand::Rng,
         solana_entry::entry::{Entry, create_ticks},
@@ -472,6 +476,7 @@ mod test {
         },
         solana_signer::Signer,
         solana_time_utils::timestamp,
+        std::num::NonZeroUsize,
     };
 
     fn local_entries_to_shred(
@@ -582,7 +587,8 @@ mod test {
             .insert_shreds(vec![original_shred.clone()], false)
             .unwrap();
 
-        let (dummy_retransmit_sender, _) = bounded(0);
+        let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+        let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
         let is_trusted = false;
         blockstore
             .insert_shreds_handle_duplicate(
@@ -670,7 +676,8 @@ mod test {
             let shreds = [&original_shred, &duplicate_shred]
                 .into_iter()
                 .map(|shred| (Cow::Borrowed(shred), /*is_repaired:*/ false));
-            let (dummy_retransmit_sender, _) = bounded(0);
+            let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+            let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
             blockstore
                 .insert_shreds_handle_duplicate(
                     shreds,

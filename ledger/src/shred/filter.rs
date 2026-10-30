@@ -9,7 +9,8 @@ use {
     },
     crate::blockstore,
     agave_feature_set as feature_set,
-    crossbeam_channel::Sender,
+    agave_worker_pool::WorkerPool,
+    itertools::Itertools,
     solana_clock::Slot,
     solana_epoch_schedule::EpochSchedule,
     solana_perf::packet::BytesPacket,
@@ -515,7 +516,7 @@ fn check_last_data_shred_index(index: u32) -> bool {
 /// Holds the context to perform filtering on shred recovery
 pub struct ShredRecoveryContext {
     /// Sender to retransmit the recovered shreds
-    retransmit_sender: Sender<Vec<Payload>>,
+    retransmit_sender: RetransmitSender,
     /// Used for filtering recovered shreds
     shred_filter_ctx: ShredFilterContext,
     /// Scratch space for the parity check of erasure batches, reused across
@@ -523,9 +524,20 @@ pub struct ShredRecoveryContext {
     parity_buffer: Vec<u8>,
 }
 
+/// Maximum number of shreds sent to retransmit workers in one job.
+///
+/// Heavy-load measurements showed sigverify at ~5us/shred and retransmit at
+/// ~18us/shred. Splitting the typical 64-shred sigverify output into four
+/// retransmit jobs gives the worker pool enough parallelism to keep up.
+pub const RETRANSMIT_SHRED_BATCH_SIZE: usize = 16;
+
+pub type ShredBatch = Vec<Payload>;
+/// Shared retransmit pool. Its last owner drains queued jobs and joins the workers.
+pub type RetransmitSender = Arc<WorkerPool<ShredBatch>>;
+
 impl ShredRecoveryContext {
     pub fn new(
-        retransmit_sender: Sender<Vec<Payload>>,
+        retransmit_sender: RetransmitSender,
         root_bank: Arc<Bank>,
         shred_version: u16,
     ) -> Self {
@@ -635,8 +647,11 @@ impl ShredRecoveryContext {
 
     /// Send recovered shreds for retransmit
     pub fn try_retransmit_shreds(&self, recovered_shreds: Vec<Payload>) {
-        if !recovered_shreds.is_empty() {
-            let _ = self.retransmit_sender.try_send(recovered_shreds);
+        for shreds in &recovered_shreds
+            .into_iter()
+            .chunks(RETRANSMIT_SHRED_BATCH_SIZE)
+        {
+            let _ = self.retransmit_sender.try_send(shreds.collect());
         }
     }
 
@@ -660,8 +675,8 @@ mod tests {
             genesis_utils::create_genesis_config,
             shred::{MAX_CODE_SHREDS_PER_SLOT, tests::*},
         },
+        agave_worker_pool::WorkerPoolConfig,
         assert_matches::assert_matches,
-        crossbeam_channel::bounded,
         itertools::Itertools,
         solana_clock::DEFAULT_NS_PER_TICK_400_MS,
         solana_leader_schedule::SlotLeader,
@@ -672,6 +687,7 @@ mod tests {
         },
         std::{
             io::{Cursor, Seek, SeekFrom, Write},
+            num::NonZeroUsize,
             sync::Arc,
             time::Duration,
         },
@@ -905,9 +921,11 @@ mod tests {
         // Feed recovery only coding shreds. Without the custom limit below, this
         // is enough parity to recover the missing data shreds.
         let max_code_shreds_per_slot = coding_shreds[0].index();
-        let (dummy_retransmit_sender, _) = bounded(0);
+        let config = WorkerPoolConfig::new("solTestRetrans", NonZeroUsize::MIN);
+        let dummy_retransmit_sender = Arc::new(WorkerPool::spawn(config, |_| |_| {}).unwrap());
         let mut shred_recovery_context =
             ShredRecoveryContext::new(dummy_retransmit_sender, new_test_bank(0), shred_version);
+
         shred_recovery_context
             .shred_filter_ctx
             .set_shred_limits_for_tests(ShredLimits::new(
