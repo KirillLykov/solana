@@ -345,6 +345,9 @@ pub fn spawn_shred_sigverify(
         let mut shred_buffer = Vec::with_capacity(SIGVERIFY_SHRED_BATCH_SIZE);
 
         loop {
+            stats.max_retransmit_queue_len = stats
+                .max_retransmit_queue_len
+                .max(retransmit_sender.channel_len());
             if deduper.maybe_reset(&mut rng, DEDUPER_FALSE_POSITIVE_RATE, DEDUPER_RESET_CYCLE) {
                 stats.num_deduper_saturations += 1;
             }
@@ -446,7 +449,11 @@ fn run_shred_sigverify(
         .into_iter()
         .chunks(RETRANSMIT_SHRED_BATCH_SIZE)
     {
-        if let Err(send_err) = retransmit_sender.try_send(shreds.collect()) {
+        let result = retransmit_sender.try_send(shreds.collect());
+        stats.max_retransmit_queue_len = stats
+            .max_retransmit_queue_len
+            .max(retransmit_sender.channel_len());
+        if let Err(send_err) = result {
             match send_err {
                 TrySendError::Full(shreds) => {
                     stats.num_retransmit_stage_overflow_shreds += shreds.len();
@@ -567,6 +574,8 @@ struct ShredSigVerifyStats {
     worker_stats: WorkerStats,
     num_retransmit_stage_overflow_shreds: usize,
     num_retransmit_shreds: usize,
+    /// Maximum observed number of queued retransmit jobs since the previous report.
+    max_retransmit_queue_len: usize,
     /// This means the OutstandingRequests cache is saturated and we
     /// threw away a verified shred due to being unable to fetch the storage location
     num_unknown_block_location: usize,
@@ -588,6 +597,7 @@ impl ShredSigVerifyStats {
             worker_stats: WorkerStats::default(),
             num_retransmit_stage_overflow_shreds: 0,
             num_retransmit_shreds: 0,
+            max_retransmit_queue_len: 0,
             num_unknown_block_location: 0,
             elapsed_micros: 0,
             verify_micros: 0,
@@ -625,6 +635,12 @@ impl ShredSigVerifyStats {
             ),
             ("elapsed_micros", self.elapsed_micros, i64),
             ("verify_micros", self.verify_micros, i64),
+        );
+
+        // Keep this ingress gauge under the existing retransmit-stage measurement.
+        datapoint_info!(
+            "retransmit-stage",
+            ("retransmit_queue_len", self.max_retransmit_queue_len, i64),
         );
 
         *self = Self::new(Instant::now());

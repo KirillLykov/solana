@@ -163,6 +163,11 @@ impl<J> WorkerPool<J> {
         self.workers.0.len()
     }
 
+    /// Returns a snapshot of the number of queued jobs, excluding jobs already being processed.
+    pub fn channel_len(&self) -> usize {
+        self.job_sender.len()
+    }
+
     /// Closes the queue and waits for the workers to finish the queued jobs.
     ///
     /// Returns the panic payload of the first worker that panicked.
@@ -334,11 +339,14 @@ mod tests {
     fn test_worker_pool_try_send_returns_job_when_queue_is_full() {
         let config = WorkerPoolConfig::new("solTestPool", NonZeroUsize::MIN);
         let pool = WorkerPool::spawn(config, |_| wait_for_release).unwrap();
+        assert_eq!(pool.channel_len(), 0);
         let (release_sender, release_receiver) = mpsc::channel();
         pool.send(release_receiver);
         // Returns once the only worker takes the first job, so this job fills the queue.
         pool.send(mpsc::channel().1);
+        assert_eq!(pool.channel_len(), 1);
         assert_matches!(pool.try_send(mpsc::channel().1), Err(TrySendError::Full(_)));
+        assert_eq!(pool.channel_len(), 1);
         release_sender.send(()).unwrap();
         pool.join().unwrap();
     }
